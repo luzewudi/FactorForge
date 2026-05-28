@@ -1,0 +1,45 @@
+paths:
+  # 基础数据路径沿用默认项目配置。
+  eod_path: "D:/凯纳/原始数据/eod"
+  fund_path: "D:/凯纳/原始数据/fundmental"
+  data_fund_path: "D:/凯纳/原始数据/shared/FactorBank/data_fund"
+  label_path: "D:/凯纳/原始数据/label"
+  # 开源证券撤单行为复现因子目录与输出目录。
+  factor_folder: "D:/凯纳/框架/开源证券-撤单行为规律初探/factor_outputs/report_reproduction/raw"
+  output_folder: "D:/凯纳/框架/开源证券-撤单行为规律初探/factor_outputs/report_reproduction/raw/output"
+
+analysis:
+  # Step1 因子分析使用的因子范围；all 表示跑 factor_folder 中所有因子。
+  factors: all
+  start_date: "20190101"
+  end_date: "20241231"
+  turnover: 1
+  per_divide_num: 10
+  universe: "0"
+  benchmark: "881001"
+  trade_price: vwap
+  # 分层组合组内加权方法：equal 等权，market 市值加权，factor_softmax 因子值 softmax 加权。
+  weight_method: equal
+  # 默认不中性化；可选 market 或 industry_market。
+  neutralization: none
+  ic_tstat:
+    window: 252
+    min_periods: 21
+
+simulation:
+  # Step2 模拟回测使用的因子范围；可以写 all，也可以写 ["factor_a", "factor_b"]。
+  factors: all
+  # Step2 可以独立配置股票池；先按 universe 过滤，再按因子方向选股。
+  universe: "0"
+  # 目标持仓加权方法：equal 等权，market 市值加权，factor_softmax 因子方向调整后 softmax 加权。
+  weight_method: equal
+  # 选股比例 0.1，和 10 分组的单组比例一致。
+  select_n: 0.1
+  fee: 0.0003
+  stamp_duty: 0.001
+  initial_capital: 10000000
+  rebalance_freq_days: 1
+  trade_price: vwap
+  benchmark: "881001"
+  slippage: 0.0
+  enable_quantstats: true

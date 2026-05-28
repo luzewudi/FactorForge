@@ -1,0 +1,47 @@
+paths:
+  # 日频行情、财务数据、行业/市值等基础数据路径。
+  eod_path: "D:/凯纳/原始数据/eod"
+  fund_path: "D:/凯纳/原始数据/fundmental"
+  data_fund_path: "D:/凯纳/原始数据/shared/FactorBank/data_fund"
+  # label_path 按 trade_price + turnover 自动匹配，例如 vwap_1d.npy。
+  label_path: "D:/凯纳/原始数据/label"
+  # factor_folder 放待分析的 .npy 因子文件，output_folder 放报告、缓存和明细。
+  factor_folder: "D:/凯纳/框架/backtest/factors"
+  output_folder: "D:/凯纳/框架/backtest/output"
+
+analysis:
+  # Step1 因子分析参数：IC/RankIC、分层净值、换手率、中性化都使用这里。
+  # factors=all 表示分析 factor_folder 中所有因子，也可以改成 ["factor_a", "factor_b"]。
+  factors: all
+  start_date: "20200102"
+  end_date: "20241231"
+  turnover: 1
+  per_divide_num: 5
+  universe: "0"
+  benchmark: "000852"
+  trade_price: vwap
+  # 分层组合组内加权方法：equal 等权，market 市值加权，factor_softmax 因子值 softmax 加权。
+  weight_method: equal
+  # neutralization 控制因子中性化：none 不处理，market 做市值中性，industry_market 做行业+市值中性。
+  neutralization: none
+  ic_tstat:
+    window: 252
+    min_periods: 21
+
+simulation:
+  # Step2 真实账户模拟参数：选股数量、费用、滑点、调仓频率和 QuantStats 增强报告都使用这里。
+  # 可以只回测指定因子；方向会自动读取 Step1 的 TOTAL RankIC 均值，不需要手工配置 factor_direction。
+  factors: all
+  # simulation 可以使用独立股票池，先按 universe 过滤，再执行选股和目标权重计算。
+  universe: "0"
+  # 目标持仓加权方法：equal 等权，market 市值加权，factor_softmax 因子方向调整后 softmax 加权。
+  weight_method: equal
+  select_n: 100
+  fee: 0.0003
+  stamp_duty: 0.001
+  initial_capital: 10000000
+  rebalance_freq_days: 1
+  trade_price: vwap
+  benchmark: "000852"
+  slippage: 0.0
+  enable_quantstats: true
