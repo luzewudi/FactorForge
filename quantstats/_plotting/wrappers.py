@@ -1744,6 +1744,7 @@ def monthly_heatmap(
 
     # Convert to monthly returns and convert to percentage
     returns = _get_stats().monthly_returns(returns, eoy=eoy, compounded=compounded) * 100
+    returns = returns.replace([_np.inf, -_np.inf], _np.nan).fillna(0.0)
 
     # Calculate figure height based on number of years
     fig_height = len(returns) / 2.5
@@ -1787,17 +1788,19 @@ def monthly_heatmap(
         benchmark = (
             _get_stats().monthly_returns(benchmark, eoy=eoy, compounded=compounded) * 100
         )
+        benchmark = benchmark.replace([_np.inf, -_np.inf], _np.nan).fillna(0.0)
         # Calculate active returns (strategy - benchmark)
-        active_returns = returns - benchmark
+        active_returns = (returns - benchmark).replace([_np.inf, -_np.inf], _np.nan).fillna(0.0)
+        annot = _heatmap_annot_frame(active_returns)
 
         # Create heatmap with active returns
         ax = _sns.heatmap(
             active_returns,
             ax=ax,
-            annot=True,
+            annot=annot,
             center=0,  # Center colormap at zero
-            annot_kws={"size": annot_size},
-            fmt="0.2f",
+            annot_kws={"size": annot_size, "weight": "bold"},
+            fmt="",
             linewidths=0.5,
             square=square,
             cbar=cbar,
@@ -1815,20 +1818,24 @@ def monthly_heatmap(
             color="black",
         )
 
+        annot = _heatmap_annot_frame(returns)
+
         # Create heatmap with monthly returns
         ax = _sns.heatmap(
             returns,
             ax=ax,
-            annot=True,
+            annot=annot,
             center=0,  # Center colormap at zero
-            annot_kws={"size": annot_size},
-            fmt="0.2f",
+            annot_kws={"size": annot_size, "weight": "bold"},
+            fmt="",
             linewidths=0.5,
             square=square,
             cbar=cbar,
             cmap=cmap,
             cbar_kws={"format": "%.0f%%"},
         )
+
+    _style_heatmap_annotations(ax)
 
     # Format color bar if present
     if cbar:
@@ -1872,6 +1879,30 @@ def monthly_heatmap(
         return fig
 
     return None
+
+
+def _heatmap_annot_frame(data: _pd.DataFrame) -> _pd.DataFrame:
+    """为热力图生成显式注释文本，保证 0.00 等值也会被写进格子。"""
+    return data.map(_heatmap_annot_value) if hasattr(data, "map") else data.applymap(_heatmap_annot_value)
+
+
+def _heatmap_annot_value(value) -> str:
+    numeric = _pd.to_numeric(_pd.Series([value]), errors="coerce").iloc[0]
+    if _pd.isna(numeric) or not _np.isfinite(float(numeric)):
+        return ""
+    return f"{float(numeric):.2f}"
+
+
+def _style_heatmap_annotations(ax) -> None:
+    """根据格子底色自动切换注释文字颜色，避免深绿/深红里数字看不见。"""
+    if not getattr(ax, "collections", None):
+        return
+    facecolors = ax.collections[0].get_facecolors()
+    for text, rgba in zip(ax.texts, facecolors):
+        red, green, blue = rgba[:3]
+        luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        text.set_color("#111827" if luminance >= 0.58 else "#FFFFFF")
+        text.set_fontweight("bold")
 
 
 def monthly_returns(

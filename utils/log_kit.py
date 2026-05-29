@@ -31,9 +31,6 @@ import unicodedata
 from colorama import Fore, Style, init
 
 from utils.path_kit import get_file_path
-import torch
-import numpy as np
-import random
 
 init(autoreset=True)
 
@@ -88,11 +85,11 @@ def get_display_width(text: str) -> int:
 class SimonsFormatter(logging.Formatter):
     FORMATS = {
         logging.DEBUG: ('', ''),
-        logging.INFO: (Fore.BLUE, "🌀 "),
-        logging.WARNING: (Fore.YELLOW, "🔔 "),
-        logging.ERROR: (Fore.RED, "❌ "),
-        logging.CRITICAL: (Fore.RED + Style.BRIGHT, "⭕ "),
-        OK_LEVEL: (Fore.GREEN, "✅ "),
+        logging.INFO: (Fore.BLUE, "[INFO] "),
+        logging.WARNING: (Fore.YELLOW, "[WARN] "),
+        logging.ERROR: (Fore.RED, "[ERROR] "),
+        logging.CRITICAL: (Fore.RED + Style.BRIGHT, "[CRITICAL] "),
+        OK_LEVEL: (Fore.GREEN, "[OK] "),
     }
 
     def format(self, record):

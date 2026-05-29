@@ -51,6 +51,7 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
     summary_rows: list[dict] = []
     factor_files = resolve_factor_files(config, stage="analysis")
     total_factors = len(factor_files)
+    annualization_factor = np.sqrt(252.0 / analysis.turnover)
     logger.info(f"[step1] 共发现 {total_factors} 个因子，开始逐个计算。")
     logger.info(
         f"[step1] 股票池={analysis.universe}，分组数={analysis.per_divide_num}，"
@@ -70,12 +71,15 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
         # Step4：横截面逐日计算 IC/RankIC，并补充年度、TOTAL 和滚动 t 值统计。
         logger.debug(f"[step1][{factor_idx}/{total_factors}] {factor_name} - Step4：计算 IC、RankIC 和滚动 t 值。")
         ic_series, rankic_series = compute_ic_rankic(factor, label, universe, trade_status, window)
-        stats_df = annual_ic_stats(ic_series, rankic_series)
+        stats_df = annual_ic_stats(ic_series, rankic_series, annualization_factor=annualization_factor)
         rolling_t = rolling_t_value(
             ic_series,
             window=analysis.ic_tstat.window,
             min_periods=analysis.ic_tstat.min_periods,
         )
+        rankic_mean = series_stats(rankic_series)["mean"]
+        if pd.notna(rankic_mean) and rankic_mean < 0:
+            rolling_t = -rolling_t
 
         # Step5：用 t-1 因子在 t 日形成分组权重，再用日度 PnL 公式计算单利分层净值。
         logger.debug(f"[step1][{factor_idx}/{total_factors}] {factor_name} - Step5：计算分组、权重、分层净值和换手。")
@@ -99,18 +103,18 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
             groups=groups,
             weights=weights,
             dates=window.pandas_index,
-            rankic_mean=series_stats(rankic_series)["mean"],
+            rankic_mean=rankic_mean,
             benchmark=benchmark,
         )
 
         # Step6：每个因子独立落盘，便于后续复核明细和直接打开 HTML。
         logger.debug(f"[step1][{factor_idx}/{total_factors}] {factor_name} - Step6：写出明细文件和 HTML 报告。")
         factor_out = Path(get_folder_by_root(out_root, factor_name))
-        ic_series.to_frame("IC").to_csv(factor_out / "ic.csv", encoding="utf-8-sig")
-        rankic_series.to_frame("RankIC").to_csv(factor_out / "rankic.csv", encoding="utf-8-sig")
-        stats_df.to_csv(factor_out / "stats.csv", index=False, encoding="utf-8-sig")
-        nav_df.to_csv(factor_out / "nav.csv", encoding="utf-8-sig")
-        turnover_df.to_csv(factor_out / "turnover.csv", encoding="utf-8-sig")
+        _write_csv_safely(ic_series.to_frame("IC"), factor_out / "ic.csv")
+        _write_csv_safely(rankic_series.to_frame("RankIC"), factor_out / "rankic.csv")
+        _write_csv_safely(stats_df, factor_out / "stats.csv", index=False)
+        _write_csv_safely(nav_df, factor_out / "nav.csv")
+        _write_csv_safely(turnover_df, factor_out / "turnover.csv")
 
         html_path = factor_out / f"{factor_name}_analysis.html"
         write_factor_analysis_html(
@@ -134,15 +138,34 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
                 html_path=html_path,
             )
         )
-        summary_rows.append(build_summary_row(factor_name, ic_series, rankic_series, nav_df, html_path))
+        summary_rows.append(
+            build_summary_row(
+                factor_name,
+                ic_series,
+                rankic_series,
+                nav_df,
+                html_path,
+                annualization_factor=annualization_factor,
+            )
+        )
         elapsed = perf_counter() - started_at
         logger.ok(f"[step1][{factor_idx}/{total_factors}] 完成因子：{factor_name}，耗时 {elapsed:.1f} 秒。")
 
     summary = pd.DataFrame(summary_rows)
-    summary.to_csv(out_root / "summary.csv", index=False, encoding="utf-8-sig")
+    _write_csv_safely(summary, out_root / "summary.csv", index=False)
     write_summary_html(summary, out_root / "summary.html", "Step1 Factor Analysis Summary")
     logger.ok(f"[step1] 全部 {total_factors} 个因子计算完成，汇总报告：{out_root / 'summary.html'}")
     return results
+
+
+def _write_csv_safely(df: pd.DataFrame, path: Path, index: bool = True) -> bool:
+    """写 CSV；Windows 文件被 Excel/浏览器锁住时不中断整个批处理。"""
+    try:
+        df.to_csv(path, index=index, encoding="utf-8-sig")
+        return True
+    except PermissionError:
+        logger.warning(f"[step1] 文件被占用，跳过覆盖：{path}")
+        return False
 
 
 def apply_neutralization(
@@ -318,7 +341,7 @@ def calculate_group_daily_return(
 
 
 def calculate_turnover(groups: np.ndarray, weights: np.ndarray) -> np.ndarray:
-    """计算研究口径换手率：sum(abs(weight[t+1] - weight[t]))，不除以 2。"""
+    """计算双边换手率：sum(abs(weight[t+1] - weight[t]))，完全换仓约等于 2。"""
     max_group = int(groups.max()) if groups.size else 0
     out = np.full((max_group, max(0, groups.shape[1] - 1)), np.nan, dtype=float)
     weights = np.nan_to_num(weights, nan=0.0)
@@ -366,18 +389,21 @@ def build_summary_row(
     rankic: pd.Series,
     nav: pd.DataFrame,
     html_path: Path,
+    annualization_factor: float = 1.0,
 ) -> dict:
     """整理单因子的摘要行，供 step1 summary.csv/html 使用。"""
-    ic_stats = series_stats(ic)
-    rankic_stats = series_stats(rankic)
+    ic_stats = series_stats(ic, annualization_factor=annualization_factor)
+    rankic_stats = series_stats(rankic, annualization_factor=annualization_factor)
     row = {
         "factor": factor_name,
         "IC_mean": ic_stats["mean"],
-        "IC_IR": ic_stats["ir"],
+        "ICIR": ic_stats["ir"],
+        "Annualized_ICIR": ic_stats["annualized_ir"],
         "IC_t": ic_stats["t_value"],
         "IC_p": ic_stats["p_value"],
         "RankIC_mean": rankic_stats["mean"],
-        "RankIC_IR": rankic_stats["ir"],
+        "RankICIR": rankic_stats["ir"],
+        "Annualized_RankICIR": rankic_stats["annualized_ir"],
         "RankIC_t": rankic_stats["t_value"],
         "RankIC_p": rankic_stats["p_value"],
         "html": str(html_path),

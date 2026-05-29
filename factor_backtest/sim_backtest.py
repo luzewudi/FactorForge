@@ -41,7 +41,14 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
     trade_status = data.load_eod_panel("TradeStatus.npy", window)
     trade_prices, close_prices, limit_status = data.load_simulation_price_panels(config.simulation.trade_price, window)
     benchmark_nav = data.load_benchmark_nav(config.simulation.benchmark, window, compound=True)
-    market_cap = data.load_market_cap(window) if config.simulation.weight_method == "market" else None
+    if benchmark_nav.empty:
+        logger.warning(
+            f"[step2] 指数 benchmark={config.simulation.benchmark} 未找到，"
+            "本次报告不会绘制 benchmark / excess_nav。"
+        )
+    market_cap = data.load_market_cap(window)
+    industry = data.load_industry(window)
+    industry_names = load_industry_name_map(config)
 
     results: list[SimulationResult] = []
     summary_rows: list[dict] = []
@@ -62,7 +69,11 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
         factor = data.load_factor(factor_path, window)
         factor = np.where(universe, factor, np.nan)
         factor = apply_neutralization(config, data, window, factor_name, factor)
-        factor_direction, rankic_mean = load_step1_rankic_direction(config, factor_name)
+        try:
+            factor_direction, rankic_mean = load_step1_rankic_direction(config, factor_name)
+        except ValueError as exc:
+            logger.warning(f"[step2][{factor_idx}/{total_factors}] 跳过因子 {factor_name}：{exc}")
+            continue
         direction_text = "选因子值小的股票" if factor_direction else "选因子值大的股票"
         logger.info(
             f"[step2][{factor_idx}/{total_factors}] {factor_name} - "
@@ -82,6 +93,8 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
             close_prices=close_prices,
             limit_status=limit_status,
             market_cap=market_cap,
+            industry=industry,
+            industry_names=industry_names,
             benchmark_nav=benchmark_nav,
             out_root=out_root,
             factor_direction=factor_direction,
@@ -93,9 +106,9 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
         logger.ok(f"[step2][{factor_idx}/{total_factors}] 完成因子：{factor_name}，耗时 {elapsed:.1f} 秒。")
 
     summary = pd.DataFrame(summary_rows)
-    summary.to_csv(out_root / "summary.csv", index=False, encoding="utf-8-sig")
+    _write_csv_safely(summary, out_root / "summary.csv", index=False)
     write_summary_html(summary, out_root / "summary.html", "Step2 Simulation Summary")
-    logger.ok(f"[step2] 全部 {total_factors} 个因子模拟完成，汇总报告：{out_root / 'summary.html'}")
+    logger.ok(f"[step2] 完成 {len(results)}/{total_factors} 个有效因子模拟，汇总报告：{out_root / 'summary.html'}")
     return results
 
 
@@ -111,6 +124,8 @@ def simulate_one_factor(
     close_prices: np.ndarray,
     limit_status: np.ndarray,
     market_cap: np.ndarray | None,
+    industry: np.ndarray | None,
+    industry_names: dict[int, str],
     benchmark_nav: pd.Series,
     out_root: Path,
     factor_direction: bool,
@@ -192,6 +207,14 @@ def simulate_one_factor(
 
     trades_df = pd.DataFrame(simulator.trade_records)
     selections_df = pd.DataFrame(selections)
+    selection_profile_df = build_selection_profile(
+        selections_df=selections_df,
+        tickers=data.tickers,
+        dates=window.dates,
+        industry=industry,
+        industry_names=industry_names,
+        market_cap=market_cap,
+    )
     metrics = nav_metrics(nav_df["strategy_nav"], nav_df.get("benchmark_nav"))
     metrics.update(
         {
@@ -201,6 +224,7 @@ def simulate_one_factor(
             "trade_count": int(len(trades_df[trades_df["shares"] > 0])) if not trades_df.empty else 0,
             "rankic_mean_from_step1": rankic_mean,
             "auto_factor_direction": "small_is_better" if factor_direction else "large_is_better",
+            "benchmark_status": "found" if benchmark_nav is not None and not benchmark_nav.empty else f"missing:{sim_cfg.benchmark}",
             "simulation_universe": sim_cfg.universe,
             "weight_method": sim_cfg.weight_method,
         }
@@ -208,15 +232,173 @@ def simulate_one_factor(
     metrics_df = metrics_to_frame(metrics)
 
     factor_out = Path(get_folder_by_root(out_root, factor_name))
-    nav_df.to_csv(factor_out / "nav.csv", encoding="utf-8-sig")
-    trades_df.to_csv(factor_out / "trades.csv", index=False, encoding="utf-8-sig")
-    selections_df.to_csv(factor_out / "selections.csv", index=False, encoding="utf-8-sig")
-    metrics_df.to_csv(factor_out / "metrics.csv", index=False, encoding="utf-8-sig")
+    _write_csv_safely(nav_df, factor_out / "nav.csv")
+    _write_csv_safely(trades_df, factor_out / "trades.csv", index=False)
+    _write_csv_safely(selections_df, factor_out / "selections.csv", index=False)
+    _write_csv_safely(selection_profile_df, factor_out / "selection_profile.csv", index=False)
+    _write_csv_safely(metrics_df, factor_out / "metrics.csv", index=False)
     html_path = factor_out / f"{factor_name}_simulation.html"
-    write_simulation_html(html_path, factor_name, nav_df, metrics_df, trades_df, selections_df)
+    write_simulation_html(html_path, factor_name, nav_df, metrics_df, trades_df, selections_df, selection_profile_df)
     maybe_write_quantstats(config, factor_name, nav_df, factor_out)
 
     return SimulationResult(factor_name, nav_df, trades_df, selections_df, metrics_df, html_path)
+
+
+def _write_csv_safely(df: pd.DataFrame, path: Path, index: bool = True) -> bool:
+    """写 CSV；Windows 文件被占用时不中断整个批处理。"""
+    try:
+        df.to_csv(path, index=index, encoding="utf-8-sig")
+        return True
+    except PermissionError:
+        logger.warning(f"[step2] 文件被占用，跳过覆盖：{path}")
+        return False
+
+
+def load_industry_name_map(config: BacktestConfig) -> dict[int, str]:
+    """读取申万一级行业代码名称表；缺失时用代码兜底。"""
+    path = config.paths.data_fund_path / "sw1.csv"
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_csv(path, encoding="gbk")
+    except UnicodeDecodeError:
+        df = pd.read_csv(path, encoding="gb18030")
+    if df.empty or len(df.columns) < 2:
+        return {}
+    code_col, name_col = df.columns[:2]
+    out: dict[int, str] = {}
+    for _, row in df.iterrows():
+        code = pd.to_numeric(pd.Series([row[code_col]]), errors="coerce").iloc[0]
+        if pd.notna(code):
+            out[int(code)] = str(row[name_col])
+    return out
+
+
+def build_selection_profile(
+    selections_df: pd.DataFrame,
+    tickers: list[str],
+    dates: list[str],
+    industry: np.ndarray | None,
+    industry_names: dict[int, str],
+    market_cap: np.ndarray | None,
+) -> pd.DataFrame:
+    """统计入选股票的行业和市值分布；按目标权重聚合为组合暴露百分比。"""
+    if selections_df.empty:
+        return pd.DataFrame(columns=["category", "segment", "weight_pct", "sample_count", "sample_pct"])
+
+    ticker_to_idx = {ticker: idx for idx, ticker in enumerate(tickers)}
+    date_to_idx = {date: idx for idx, date in enumerate(dates)}
+
+    stocks = normalize_selection_stock_series(selections_df.get("stock_code", pd.Series(dtype=object)))
+    selection_dates = normalize_selection_date_series(selections_df.get("date", pd.Series(dtype=object)))
+    stock_idx = stocks.map(ticker_to_idx)
+    date_idx = selection_dates.map(date_to_idx)
+    valid = stock_idx.notna() & date_idx.notna()
+    if not valid.any():
+        return pd.DataFrame(columns=["category", "segment", "weight_pct", "sample_count", "sample_pct"])
+
+    stock_idx_arr = stock_idx[valid].astype(int).to_numpy()
+    date_idx_arr = date_idx[valid].astype(int).to_numpy()
+    weight = pd.to_numeric(selections_df.loc[valid, "target_weight"], errors="coerce").astype(float)
+    weight = weight.where(weight > 0, 1.0).fillna(1.0).to_numpy()
+
+    industry_segment = np.full(len(stock_idx_arr), "Unknown", dtype=object)
+    if industry is not None:
+        codes = industry[stock_idx_arr, date_idx_arr]
+        finite = np.isfinite(codes)
+        code_int = np.zeros(len(codes), dtype=int)
+        code_int[finite] = codes[finite].astype(int)
+        for code in np.unique(code_int[finite]):
+            industry_segment[finite & (code_int == code)] = industry_names.get(int(code), str(int(code)))
+
+    cap_segment = np.full(len(stock_idx_arr), "Unknown", dtype=object)
+    if market_cap is not None:
+        cap_values = market_cap[stock_idx_arr, date_idx_arr]
+        finite_cap = np.isfinite(cap_values) & (cap_values > 0)
+        cap_segment[finite_cap & (cap_values < 5e9)] = "<50亿"
+        cap_segment[finite_cap & (cap_values >= 5e9) & (cap_values < 1e10)] = "50-100亿"
+        cap_segment[finite_cap & (cap_values >= 1e10) & (cap_values < 2e10)] = "100-200亿"
+        cap_segment[finite_cap & (cap_values >= 2e10) & (cap_values < 5e10)] = "200-500亿"
+        cap_segment[finite_cap & (cap_values >= 5e10) & (cap_values < 1e11)] = "500-1000亿"
+        cap_segment[finite_cap & (cap_values >= 1e11)] = ">=1000亿"
+
+    raw = pd.DataFrame({"industry": industry_segment, "market_cap": cap_segment, "weight": weight})
+    out_rows: list[dict] = []
+    for category, col in [("industry", "industry"), ("market_cap", "market_cap")]:
+        total_weight = raw["weight"].sum()
+        total_count = len(raw)
+        grouped = raw.groupby(col, dropna=False).agg(weight=("weight", "sum"), sample_count=("weight", "size"))
+        grouped = grouped.sort_values("weight", ascending=False)
+        for segment, part in grouped.iterrows():
+            out_rows.append(
+                {
+                    "category": category,
+                    "segment": str(segment),
+                    "weight_pct": float(part["weight"] / total_weight) if total_weight > 0 else np.nan,
+                    "sample_count": int(part["sample_count"]),
+                    "sample_pct": float(part["sample_count"] / total_count) if total_count > 0 else np.nan,
+                }
+            )
+    return pd.DataFrame(out_rows)
+
+
+def normalize_selection_stock(value) -> str:
+    """把 selections.csv 里可能被读成数字的股票代码恢复为 6 位字符串。"""
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.notna(numeric):
+        return f"{int(numeric):06d}"
+    text = str(value).strip().upper()
+    if len(text) == 8 and text[:2] in {"SH", "SZ", "BJ"}:
+        text = text[2:]
+    return text.zfill(6) if text.isdigit() else text
+
+
+def normalize_selection_stock_series(values: pd.Series) -> pd.Series:
+    """向量化恢复 6 位股票代码。"""
+    numeric = pd.to_numeric(values, errors="coerce")
+    out = values.astype(str).str.strip().str.upper()
+    numeric_mask = numeric.notna()
+    out.loc[numeric_mask] = numeric.loc[numeric_mask].astype(int).map(lambda value: f"{value:06d}")
+    prefixed = out.str.len().eq(8) & out.str[:2].isin(["SH", "SZ", "BJ"])
+    out.loc[prefixed] = out.loc[prefixed].str[2:]
+    digit_mask = out.str.isdigit()
+    out.loc[digit_mask] = out.loc[digit_mask].str.zfill(6)
+    return out
+
+
+def normalize_selection_date(value) -> str:
+    """把 selections.csv 里可能被读成数字或日期的字段统一成 YYYYMMDD。"""
+    if isinstance(value, pd.Timestamp):
+        return value.strftime("%Y%m%d")
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.notna(numeric):
+        return f"{int(numeric):08d}"
+    return str(value).strip().replace("-", "").replace("/", "")
+
+
+def normalize_selection_date_series(values: pd.Series) -> pd.Series:
+    """向量化恢复 YYYYMMDD 日期字符串。"""
+    numeric = pd.to_numeric(values, errors="coerce")
+    out = values.astype(str).str.strip().str.replace("-", "", regex=False).str.replace("/", "", regex=False)
+    numeric_mask = numeric.notna()
+    out.loc[numeric_mask] = numeric.loc[numeric_mask].astype(int).map(lambda value: f"{value:08d}")
+    return out
+
+
+def market_cap_bucket(value: float) -> str:
+    """按常见 A 股市值分桶，输入单位为元。"""
+    yi = value / 1e8
+    if yi < 50:
+        return "<50亿"
+    if yi < 100:
+        return "50-100亿"
+    if yi < 200:
+        return "100-200亿"
+    if yi < 500:
+        return "200-500亿"
+    if yi < 1000:
+        return "500-1000亿"
+    return ">=1000亿"
 
 
 def should_rebalance(date_idx: int, freq: int) -> bool:
