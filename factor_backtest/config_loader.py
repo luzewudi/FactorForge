@@ -113,7 +113,7 @@ class AnalysisConfig:
     period: str = "1"
     offsets: str | List[str] = "all"
     offset_mode: str = "ensemble"
-    label_days: int = 1
+    label_days: str | int = 1
     per_divide_num: int = 5
     universe: str = "0"
     benchmark: str = "000852"
@@ -126,12 +126,12 @@ class AnalysisConfig:
     def from_dict(cls, raw: dict[str, Any], default_factors: str | List[str] = "all") -> "AnalysisConfig":
         """读取 analysis 模块，定义 Step1 因子研究需要的日期、分组、基准和中性化口径。"""
         period = normalize_period(raw.get("period", raw.get("turnover", 1)))
-        label_days = int(raw.get("label_days", raw.get("turnover", period_to_label_days(period))))
+        label_days = normalize_label_period(raw.get("label_days", raw.get("turnover", period_to_label_days(period))))
         return cls(
             start_date=normalize_date(raw.get("start_date"), "analysis.start_date"),
             end_date=normalize_date(raw.get("end_date"), "analysis.end_date"),
             factors=normalize_factors(raw.get("factors", default_factors)),
-            turnover=int(raw.get("turnover", label_days)),
+            turnover=int(raw.get("turnover", label_period_to_days(label_days))),
             period=period,
             offsets=normalize_offsets(raw.get("offsets", "all")),
             offset_mode=str(raw.get("offset_mode", "ensemble")).strip().lower(),
@@ -288,6 +288,30 @@ def period_to_label_days(period: str) -> int:
     return aliases.get(text, 1)
 
 
+def normalize_label_period(raw: Any) -> str | int:
+    """解析 label_days，兼容 5/vwap_5d.npy 和 W/vwap_W.npy 两类标签文件。"""
+    if raw is None:
+        return 1
+    if isinstance(raw, (int, float)) and float(raw).is_integer():
+        return int(raw)
+    text = str(raw).strip()
+    if not text:
+        return 1
+    if text.replace(".", "", 1).isdigit() and float(text).is_integer():
+        return int(float(text))
+    return normalize_period(text)
+
+
+def label_period_to_days(label_period: str | int) -> int:
+    """把 label 周期转换为年化近似交易日数；文件名解析仍保留原 label_period。"""
+    if isinstance(label_period, int):
+        return label_period
+    text = normalize_period(label_period)
+    if text.isdigit():
+        return int(text)
+    return period_to_label_days(text)
+
+
 def strip_npy_suffix(name: str) -> str:
     """去掉因子名末尾的 .npy，保证 YAML 中写不写后缀都能找到同一个文件。"""
     return name[:-4] if name.lower().endswith(".npy") else name
@@ -318,7 +342,7 @@ def validate_config(paths: PathConfig, analysis: AnalysisConfig, simulation: Sim
         raise ValueError("analysis.start_date must be <= analysis.end_date")
     if analysis.turnover <= 0:
         raise ValueError("analysis.turnover must be positive")
-    if analysis.label_days <= 0:
+    if label_period_to_days(analysis.label_days) <= 0:
         raise ValueError("analysis.label_days must be positive")
     if analysis.offset_mode != "ensemble":
         raise ValueError("analysis.offset_mode currently supports only ensemble")

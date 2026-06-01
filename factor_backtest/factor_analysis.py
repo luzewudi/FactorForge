@@ -8,7 +8,7 @@ from time import perf_counter
 import numpy as np
 import pandas as pd
 
-from .config_loader import BacktestConfig, resolve_factor_files
+from .config_loader import BacktestConfig, label_period_to_days, resolve_factor_files
 from .data_loader import BacktestData, DateWindow
 from .metrics import annual_ic_stats, pearson_ic, rank_ic, rolling_t_value, series_stats
 from .neutralization import neutralize_factor
@@ -53,11 +53,12 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
     summary_rows: list[dict] = []
     factor_files = resolve_factor_files(config, stage="analysis")
     total_factors = len(factor_files)
-    annualization_factor = np.sqrt(252.0 / analysis.label_days)
+    label_annualization_days = label_period_to_days(analysis.label_days)
+    annualization_factor = np.sqrt(252.0 / label_annualization_days)
     logger.info(f"[step1] 共发现 {total_factors} 个因子，开始逐个计算。")
     logger.info(
         f"[step1] 股票池={analysis.universe}，分组数={analysis.per_divide_num}，"
-        f"周期={analysis.period}，offset数={len(period_masks)}，label={analysis.label_days}日，"
+        f"周期={analysis.period}，offset数={len(period_masks)}，label={analysis.label_days}，"
         f"加权方法={analysis.weight_method}。"
     )
     for factor_idx, factor_path in enumerate(factor_files, start=1):

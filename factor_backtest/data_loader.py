@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
 
-from .config_loader import BacktestConfig, strip_npy_suffix
+from .config_loader import BacktestConfig, normalize_offset_label, normalize_period, strip_npy_suffix
 
 
 def decode_array(values: Iterable) -> list[str]:
@@ -25,6 +25,50 @@ def normalize_date_label(value: str) -> str:
     """把日期标签统一成 YYYYMMDD，兼容 YYYY-MM-DD 和 YYYY/MM/DD。"""
     text = str(value).strip().replace("-", "").replace("/", "")
     return text if len(text) == 8 and text.isdigit() else str(value).strip()
+
+
+def load_period_files(period_path: Path) -> tuple[list[str], np.ndarray, list[str]]:
+    """读取独立脚本生成的 period 预运算文件。"""
+    period_path = Path(period_path)
+    names_path = period_path / "period.npy"
+    mask_path = period_path / "period_dates.npy"
+    dates_path = period_path / "dates.npy"
+    missing = [path for path in [names_path, mask_path, dates_path] if not path.exists()]
+    if missing:
+        missing_text = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(f"period files not found: {missing_text}")
+
+    period_names = decode_array(np.load(names_path, allow_pickle=True))
+    period_dates = np.load(mask_path, allow_pickle=False)
+    dates = [normalize_date_label(x) for x in decode_array(np.load(dates_path, allow_pickle=True))]
+    if period_dates.shape != (len(period_names), len(dates)):
+        raise ValueError(
+            f"period_dates shape {period_dates.shape} does not match "
+            f"period count {len(period_names)} and date count {len(dates)}"
+        )
+    return period_names, period_dates.astype(bool, copy=False), dates
+
+
+def resolve_period_keys(period_names: list[str], period: Any, offsets: str | list[str]) -> list[str]:
+    """把 YAML 中的 period/offsets 配置解析成 period 文件里的具体行名。"""
+    base = normalize_period(period)
+    prefix = f"{base}_"
+    available = [name for name in period_names if name.startswith(prefix)]
+    if offsets == "all":
+        keys = available
+    else:
+        keys = [format_period_key(base, offset) for offset in offsets]
+
+    missing = [key for key in keys if key not in period_names]
+    if missing:
+        sample = ", ".join(available[:12])
+        raise ValueError(f"period keys not found: {missing}. Available for {base}: {sample}")
+    return keys
+
+
+def format_period_key(period: Any, offset: Any) -> str:
+    """按 period.npy 的命名规则拼出周期键，例如 20_7。"""
+    return f"{normalize_period(period)}_{normalize_offset_label(offset)}"
 
 
 def normalize_ticker_label(value: str) -> str:
@@ -63,6 +107,16 @@ def label_price_prefix(name: str) -> str:
     if text == "periodvwap":
         text = "vwap"
     return text
+
+
+def label_file_suffix(label_period: str | int) -> str:
+    """把 label_days 配置映射到文件后缀：5 -> 5d，W -> W。"""
+    if isinstance(label_period, (int, float)) and float(label_period).is_integer():
+        return f"{int(label_period)}d"
+    text = str(label_period).strip()
+    if text.replace(".", "", 1).isdigit() and float(text).is_integer():
+        return f"{int(float(text))}d"
+    return normalize_period(text)
 
 
 def clean_numeric(arr: np.ndarray) -> np.ndarray:
@@ -119,8 +173,6 @@ class BacktestData:
         window: DateWindow,
     ) -> dict[str, np.ndarray]:
         """读取 period 预运算结果，并按当前日期窗口返回每个 offset 的调仓日掩码。"""
-        from .periods import load_period_files, resolve_period_keys
-
         period_names, period_dates, period_file_dates = load_period_files(self.config.paths.period_path)
         keys = resolve_period_keys(period_names, period, offsets)
         name_to_row = {name: idx for idx, name in enumerate(period_names)}
@@ -136,6 +188,8 @@ class BacktestData:
         for key in keys:
             mask = np.asarray(period_dates[name_to_row[key], cols], dtype=bool)
             if len(mask) > 0:
+                # 配置区间第一天视为“选股日期”，不在窗口内立即调仓；
+                # 真正交易从起始日之后第一个 True 的周期日开始。
                 mask[0] = False
             out[key] = mask
         return out
@@ -263,10 +317,10 @@ class BacktestData:
             panel = self._align_panel(arr, self.config.paths.factor_folder, window)
         return np.where(np.isfinite(panel), panel, np.nan)
 
-    def load_label(self, trade_price: str, turnover: int, window: DateWindow) -> np.ndarray:
-        """按 generate_labels.py 约定读取 label，例如 vwap_1d.npy，并裁剪到研究窗口。"""
+    def load_label(self, trade_price: str, label_period: str | int, window: DateWindow) -> np.ndarray:
+        """按 generate_labels.py 约定读取 label，例如 vwap_1d.npy、vwap_W.npy。"""
         prefix = label_price_prefix(trade_price)
-        path = self.config.paths.label_path / f"{prefix}_{int(turnover)}d.npy"
+        path = self.config.paths.label_path / f"{prefix}_{label_file_suffix(label_period)}.npy"
         if not path.exists():
             raise FileNotFoundError(f"label file not found: {path}")
         arr = self.npy(path)

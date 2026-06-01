@@ -1,9 +1,12 @@
 paths:
   # 基础数据路径沿用默认项目配置。
   eod_path: "D:/凯纳/原始数据/eod"
+  # period_path 存放 generate_period_files.py 生成的 period.npy、period_dates.npy、dates.npy。
+  # Step1/Step2 的 period 与 offsets 都从这里读取预计算换仓日。
   period_path: "D:/凯纳/原始数据/period"
   fund_path: "D:/凯纳/原始数据/fundmental"
   data_fund_path: "D:/凯纳/原始数据/shared/FactorBank/data_fund"
+  # label_path 按 trade_price + label_days 匹配，例如 vwap_1d.npy、vwap_5d.npy、vwap_W.npy。
   label_path: "D:/凯纳/原始数据/label"
   # 开源证券撤单行为复现因子目录与输出目录。
   factor_folder: "D:/凯纳/框架/开源证券-撤单行为规律初探/factor_outputs/report_reproduction/raw"
@@ -14,10 +17,13 @@ analysis:
   factors: all
   start_date: "20190101"
   end_date: "20241231"
-  turnover: 1
+  # period 控制换仓周期，可写 1、5、20、W、2W、M 等，对应 period.npy 中的前缀。
+  # offsets 写 [0] 表示单 offset；写 all 表示使用该 period 下全部 offset 做 ensemble。
+  # 例：period=5, offsets=all 会使用 5_0...5_4；period=20 会使用 20_0...20_19。
   period: 1
   offsets: all
   offset_mode: ensemble
+  # label_days 控制 IC/RankIC 使用哪个收益标签：1 -> vwap_1d.npy，5 -> vwap_5d.npy，W -> vwap_W.npy。
   label_days: 1
   per_divide_num: 10
   universe: "0"
@@ -43,7 +49,7 @@ simulation:
   fee: 0.0003
   stamp_duty: 0.001
   initial_capital: 10000000
-  rebalance_freq_days: 1
+  # period/offsets 读取 period_path 下的预计算换仓日；offsets=all 会多 offset 分资金袖套合成。
   period: 1
   offsets: all
   offset_mode: ensemble

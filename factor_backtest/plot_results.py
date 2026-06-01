@@ -31,7 +31,7 @@ def write_factor_analysis_html(
         _ic_figure(
             title="IC",
             series=ic,
-            cumulative_name="Cumulative IC",
+            cumulative_name="累计 IC",
             bar_color="#4E79A7",
             line_color="#F28E2B",
             stats_text=_stats_line(stats_df, "IC"),
@@ -39,7 +39,7 @@ def write_factor_analysis_html(
         _ic_figure(
             title="RankIC",
             series=rankic,
-            cumulative_name="Cumulative RankIC",
+            cumulative_name="累计 RankIC",
             bar_color="#2E7D32",
             line_color="#D62728",
             stats_text=_stats_line(stats_df, "RankIC"),
@@ -48,7 +48,7 @@ def write_factor_analysis_html(
         _layer_nav_figure(nav_df),
         _final_nav_bar_figure(nav_df),
         _turnover_figure(turnover_df),
-        _table_figure(stats_df, title="Statistics", height=520),
+        _table_figure(stats_df, title="统计指标", height=520),
     ]
     _write_report_html(
         out_path=out_path,
@@ -83,7 +83,7 @@ def write_simulation_html(
     ]
     _write_report_html(
         out_path=out_path,
-        title=f"{factor_name} simulation backtest",
+        title=f"{factor_name} 模拟回测",
         figures=[fig for fig in figs if fig is not None],
     )
 
@@ -182,7 +182,7 @@ def _ic_figure(
         go.Scatter(
             x=ma.index,
             y=ma.values,
-            name=f"{title}_mean20",
+            name=f"{title} 20日均值",
             line=dict(color=_mean_line_color(title), width=2.4),
         ),
         secondary_y=False,
@@ -218,13 +218,13 @@ def _rolling_t_figure(rolling_t: pd.Series) -> go.Figure | None:
         go.Scatter(
             x=s.index,
             y=s.values,
-            name="Rolling IC t-stat",
+            name="滚动 IC t 值",
             line=dict(color="#B07AA1", width=2),
         )
     )
     fig.add_hline(y=0.0, line_dash="dash", line_color="#8A94A6")
-    _style_time_series_figure(fig, title="Rolling IC t-stat", height=430, legend_x=0.84, x_domain=(0.0, 0.82))
-    fig.update_yaxes(title_text="t-stat", tickformat=".2f")
+    _style_time_series_figure(fig, title="滚动 IC t 值", height=430, legend_x=0.84, x_domain=(0.0, 0.82))
+    fig.update_yaxes(title_text="t 值", tickformat=".2f")
     return fig
 
 
@@ -259,7 +259,7 @@ def _layer_nav_figure(nav_df: pd.DataFrame) -> go.Figure | None:
             go.Scatter(
                 x=nav_df.index,
                 y=nav_df["long_short"],
-                name="long_short",
+                name="多空净值",
                 line=dict(width=3.0, color="#D62728"),
             )
         )
@@ -268,12 +268,12 @@ def _layer_nav_figure(nav_df: pd.DataFrame) -> go.Figure | None:
             go.Scatter(
                 x=nav_df.index,
                 y=nav_df["benchmark"],
-                name="benchmark",
-                line=dict(width=2.2, color="#6B7280", dash="dash"),
+                name="基准净值",
+                line=dict(width=2.2, color="#111827"),
             )
         )
-    _style_time_series_figure(fig, title="Layer NAV", height=660, legend_x=0.84, x_domain=(0.0, 0.82))
-    fig.update_yaxes(title_text="NAV", tickformat=".3f")
+    _style_time_series_figure(fig, title="分层净值", height=660, legend_x=0.84, x_domain=(0.0, 0.82))
+    fig.update_yaxes(title_text="净值", tickformat=".3f")
     return fig
 
 
@@ -287,7 +287,7 @@ def _final_nav_bar_figure(nav_df: pd.DataFrame) -> go.Figure | None:
         go.Bar(
             x=final_nav.index.tolist(),
             y=final_nav.values,
-            name="final NAV",
+            name="期末净值",
             marker_color="#4E79A7",
             text=[_fmt(value) for value in final_nav.values],
             textposition="outside",
@@ -299,15 +299,15 @@ def _final_nav_bar_figure(nav_df: pd.DataFrame) -> go.Figure | None:
         template="plotly_white",
         width=1500,
         height=430,
-        title={"text": "Layer Final NAV", "x": 0.5, "xanchor": "center"},
+        title={"text": "分层期末净值", "x": 0.5, "xanchor": "center"},
         margin=dict(l=70, r=70, t=70, b=55),
         hovermode="x unified",
         showlegend=False,
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
     )
-    fig.update_yaxes(title_text="Final NAV", tickformat=".3f", gridcolor="#E5ECF6")
-    fig.update_xaxes(title_text="Layer", gridcolor="#EEF2F7")
+    fig.update_yaxes(title_text="期末净值", tickformat=".3f", gridcolor="#E5ECF6")
+    fig.update_xaxes(title_text="分组", gridcolor="#EEF2F7")
     return fig
 
 
@@ -321,7 +321,7 @@ def _turnover_figure(turnover_df: pd.DataFrame) -> go.Figure | None:
             go.Scatter(
                 x=turnover_df.index,
                 y=turnover_df[col],
-                name=f"turnover_{col}",
+                name=f"换手_{col}",
                 line=dict(width=1.0),
                 opacity=0.55,
             )
@@ -331,11 +331,11 @@ def _turnover_figure(turnover_df: pd.DataFrame) -> go.Figure | None:
             go.Scatter(
                 x=turnover_df.index,
                 y=turnover_df["average"],
-                name="turnover_average",
+                name="平均换手",
                 line=dict(width=2.8, color="#D62728"),
             )
         )
-    _style_time_series_figure(fig, title="Turnover", height=470, legend_x=0.84, x_domain=(0.0, 0.82))
+    _style_time_series_figure(fig, title="换手率", height=470, legend_x=0.84, x_domain=(0.0, 0.82))
     return fig
 
 
@@ -348,7 +348,7 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
         go.Scatter(
             x=nav_df.index,
             y=nav_df["strategy_nav"],
-            name="strategy_nav",
+            name="策略净值",
             line=dict(color="#1F77B4", width=2.4),
         )
     )
@@ -357,8 +357,8 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
             go.Scatter(
                 x=nav_df.index,
                 y=nav_df["benchmark_nav"],
-                name="benchmark_nav",
-                line=dict(color="#6B7280", width=2.0, dash="dash"),
+                name="基准净值",
+                line=dict(color="#111827", width=2.2),
             )
         )
     if "excess_nav" in nav_df.columns:
@@ -366,7 +366,7 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
             go.Scatter(
                 x=nav_df.index,
                 y=nav_df["excess_nav"],
-                name="excess_nav",
+                name="超额净值",
                 line=dict(color="#F28E2B", width=2.0),
             )
         )
@@ -376,12 +376,12 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
         go.Scatter(
             x=dd.index,
             y=dd.values,
-            name="drawdown",
+            name="回撤",
             yaxis="y2",
             fill="tozeroy",
             line=dict(width=0, color="rgba(214, 39, 40, 0.16)"),
             fillcolor="rgba(214, 39, 40, 0.16)",
-            hovertemplate="drawdown: %{y:.2%}<extra></extra>",
+            hovertemplate="回撤: %{y:.2%}<extra></extra>",
         )
     )
     peak, trough, max_dd = _max_drawdown_points(nav_df["strategy_nav"])
@@ -403,7 +403,7 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
             y=trough_value,
             xref="x",
             yref="y",
-            text=f"Max DD {max_dd:.2%}",
+            text=f"最大回撤 {max_dd:.2%}",
             showarrow=True,
             arrowhead=2,
             ax=40,
@@ -439,11 +439,11 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
         template="plotly_white",
         width=1500,
         height=720,
-        title={"text": "Equity / benchmark / drawdown", "x": 0.37, "xanchor": "center"},
+        title={"text": "策略净值 / 基准 / 回撤", "x": 0.36, "xanchor": "center", "y": 0.98, "yanchor": "top"},
         xaxis=dict(domain=[0.0, 0.72], showspikes=True, spikemode="across+marker", gridcolor="#EEF2F7"),
-        yaxis=dict(title="NAV", gridcolor="#E5ECF6", tickformat=".3f"),
+        yaxis=dict(title="净值", gridcolor="#E5ECF6", tickformat=".3f"),
         yaxis2=dict(
-            title="Drawdown",
+            title="回撤",
             overlaying="y",
             side="right",
             position=0.72,
@@ -453,18 +453,19 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
         ),
         legend=dict(
             orientation="h",
-            x=0.0,
-            y=1.035,
-            xanchor="left",
+            x=0.36,
+            y=1.065,
+            xanchor="center",
             yanchor="bottom",
             bgcolor="rgba(255,255,255,0.85)",
             bordercolor="#D8DEE9",
             borderwidth=1,
         ),
         hovermode="x unified",
-        margin=dict(l=70, r=35, t=105, b=55),
+        margin=dict(l=70, r=35, t=130, b=55),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
     return fig
 
@@ -504,8 +505,8 @@ def _simulation_offset_nav_figure(offset_nav_df: pd.DataFrame | None) -> go.Figu
             go.Scatter(
                 x=offset_nav_df.index,
                 y=offset_nav_df["benchmark_nav"],
-                name="benchmark_nav",
-                line=dict(color="#111827", width=2.6, dash="dash"),
+                name="基准净值",
+                line=dict(color="#111827", width=2.6),
             )
         )
     fig.update_layout(
@@ -514,7 +515,7 @@ def _simulation_offset_nav_figure(offset_nav_df: pd.DataFrame | None) -> go.Figu
         height=560,
         title={"text": "所有 offset 净值对比", "x": 0.38, "xanchor": "center"},
         xaxis=dict(domain=[0.0, 0.78], showspikes=True, spikemode="across+marker", gridcolor="#EEF2F7"),
-        yaxis=dict(title="NAV", tickformat=".3f", gridcolor="#E5ECF6"),
+        yaxis=dict(title="净值", tickformat=".3f", gridcolor="#E5ECF6"),
         legend=dict(
             x=0.805,
             y=1.0,
@@ -530,6 +531,7 @@ def _simulation_offset_nav_figure(offset_nav_df: pd.DataFrame | None) -> go.Figu
         margin=dict(l=70, r=35, t=85, b=55),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
     return fig
 
@@ -544,16 +546,17 @@ def _simulation_daily_return_figure(nav_df: pd.DataFrame) -> go.Figure | None:
     else:
         active &= ret.ne(0)
     summary = _return_summary(ret[active], ret)
-    colors = np.where(ret.fillna(0).to_numpy() >= 0, "#C81D25", "#178C4E")
+    colors = np.where(ret.fillna(0).to_numpy() >= 0, "#D62728", "#00843D")
 
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=nav_df.index,
             y=ret,
-            name="daily_return",
+            name="日收益率",
             marker_color=colors,
-            opacity=0.9,
+            marker_line_width=0,
+            opacity=1.0,
         )
     )
     fig.add_hline(y=0.0, line_dash="dot", line_color="#8A94A6")
@@ -562,14 +565,15 @@ def _simulation_daily_return_figure(nav_df: pd.DataFrame) -> go.Figure | None:
         template="plotly_white",
         width=1500,
         height=420,
-        title={"text": "Daily return", "x": 0.36, "xanchor": "center"},
+        title={"text": "日收益率", "x": 0.36, "xanchor": "center"},
         xaxis=dict(domain=[0.0, 0.74], showspikes=True, spikemode="across+marker", gridcolor="#EEF2F7"),
-        yaxis=dict(title="Return", tickformat=".2%", gridcolor="#E5ECF6"),
+        yaxis=dict(title="收益率", tickformat=".2%", gridcolor="#E5ECF6"),
         showlegend=False,
         hovermode="x unified",
         margin=dict(l=70, r=35, t=80, b=55),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
     return fig
 
@@ -580,18 +584,19 @@ def _simulation_turnover_figure(nav_df: pd.DataFrame) -> go.Figure | None:
     turnover = pd.Series(nav_df["turnover"], index=nav_df.index, dtype=float).replace([np.inf, -np.inf], np.nan)
     active_turnover = turnover[turnover.notna() & (turnover > 0)]
     summary = {
-        "Active Mean": _fmt_pct(active_turnover.mean()) if not active_turnover.empty else "",
-        "All-Day Mean": _fmt_pct(turnover.dropna().mean()) if not turnover.dropna().empty else "",
-        "Active Days": f"{len(active_turnover):,}",
+        "调仓日均值": _fmt_pct(active_turnover.mean()) if not active_turnover.empty else "",
+        "全样本均值": _fmt_pct(turnover.dropna().mean()) if not turnover.dropna().empty else "",
+        "调仓天数": f"{len(active_turnover):,}",
     }
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
             x=nav_df.index,
             y=turnover,
-            name="turnover",
-            marker_color="#2F6DAE",
-            opacity=0.88,
+            name="换手率",
+            marker_color="#1F4E79",
+            marker_line_width=0,
+            opacity=1.0,
         )
     )
     if not active_turnover.empty:
@@ -601,16 +606,17 @@ def _simulation_turnover_figure(nav_df: pd.DataFrame) -> go.Figure | None:
         template="plotly_white",
         width=1500,
         height=420,
-        title={"text": "Daily turnover", "x": 0.36, "xanchor": "center"},
+        title={"text": "日换手率", "x": 0.36, "xanchor": "center"},
         xaxis=dict(domain=[0.0, 0.74], showspikes=True, spikemode="across+marker", gridcolor="#EEF2F7"),
-        yaxis=dict(title="Turnover", tickformat=".2%", gridcolor="#E5ECF6"),
+        yaxis=dict(title="换手率", tickformat=".2%", gridcolor="#E5ECF6"),
         showlegend=False,
         hovermode="x unified",
         margin=dict(l=70, r=35, t=80, b=55),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
-    fig.update_yaxes(title_text="Turnover", tickformat=".2f")
+    fig.update_yaxes(title_text="换手率", tickformat=".2f")
     return fig
 
 
@@ -634,7 +640,7 @@ def _selection_profile_figure(selection_profile_df: pd.DataFrame) -> go.Figure |
         cols=2,
         column_widths=[0.62, 0.38],
         horizontal_spacing=0.16,
-        subplot_titles=["Selected industry exposure", "Selected market-cap exposure"],
+        subplot_titles=["行业暴露", "市值暴露"],
     )
     if not industry.empty:
         fig.add_trace(
@@ -642,7 +648,7 @@ def _selection_profile_figure(selection_profile_df: pd.DataFrame) -> go.Figure |
                 x=industry["weight_pct"],
                 y=industry["segment"],
                 orientation="h",
-                name="industry",
+                name="行业",
                 marker_color="#2F6DAE",
                 text=industry["weight_pct"].map(lambda value: f"{value:.1%}"),
                 textposition="outside",
@@ -657,7 +663,7 @@ def _selection_profile_figure(selection_profile_df: pd.DataFrame) -> go.Figure |
                 x=market_cap["weight_pct"],
                 y=market_cap["segment"],
                 orientation="h",
-                name="market_cap",
+                name="市值",
                 marker_color="#8E5EA2",
                 text=market_cap["weight_pct"].map(lambda value: f"{value:.1%}"),
                 textposition="outside",
@@ -670,11 +676,12 @@ def _selection_profile_figure(selection_profile_df: pd.DataFrame) -> go.Figure |
         template="plotly_white",
         width=1500,
         height=max(520, 28 * max(len(industry), len(market_cap)) + 180),
-        title={"text": "Selected stock profile", "x": 0.5, "xanchor": "center"},
+        title={"text": "选股画像", "x": 0.5, "xanchor": "center"},
         showlegend=False,
         margin=dict(l=160, r=80, t=90, b=55),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
     fig.update_xaxes(tickformat=".0%", gridcolor="#E5ECF6")
     fig.update_yaxes(gridcolor="#EEF2F7")
@@ -685,13 +692,19 @@ def _table_figure(table_df: pd.DataFrame, title: str, height: int = 500) -> go.F
     if table_df.empty:
         return None
     display = table_df.copy()
+    display = display.drop(columns=["ICIR", "Annualized_ICIR", "RankICIR", "Annualized_RankICIR"], errors="ignore")
     display = display.rename(
         columns={
+            "period": "区间",
+            "series": "序列",
+            "mean": "均值",
+            "std": "标准差",
             "ir": "ICIR/RankICIR",
-            "annualized_ir": "Annualized ICIR/RankICIR",
-            "win_rate": "Directional Win Rate",
-            "t_value": "Directional t",
-            "p_value": "Directional p",
+            "annualized_ir": "年化 ICIR/RankICIR",
+            "win_rate": "方向胜率",
+            "t_value": "方向 t 值",
+            "p_value": "方向 p 值",
+            "count": "样本数",
         }
     )
     for col in display.columns:
@@ -722,6 +735,7 @@ def _table_figure(table_df: pd.DataFrame, title: str, height: int = 500) -> go.F
         title={"text": title, "x": 0.0, "xanchor": "left"},
         margin=dict(l=20, r=20, t=60, b=20),
         paper_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
     return fig
 
@@ -753,6 +767,7 @@ def _style_time_series_figure(
         margin=dict(l=70, r=70, t=80, b=55),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
+        font=dict(family='Arial, "Microsoft YaHei", sans-serif', color="#10233F"),
     )
     fig.update_xaxes(domain=list(x_domain), showspikes=True, spikemode="across+marker", gridcolor="#EEF2F7")
     fig.update_yaxes(showspikes=True, spikemode="across", gridcolor="#E5ECF6")
@@ -780,12 +795,12 @@ def _stats_line(stats_df: pd.DataFrame, series_name: str) -> str:
     row = stats_df.loc[mask].iloc[0]
     ir_name = "年化 RankICIR" if str(series_name).lower() == "rankic" else "年化 ICIR"
     parts = [
-        f"mean: {_fmt(row.get('mean'))}",
-        f"std: {_fmt(row.get('std'))}",
+        f"均值: {_fmt(row.get('mean'))}",
+        f"标准差: {_fmt(row.get('std'))}",
         f"{ir_name}: {_fmt(row.get('annualized_ir', row.get('ir')))}",
-        f"win: {_fmt_pct(row.get('win_rate'))}",
+        f"方向胜率: {_fmt_pct(row.get('win_rate'))}",
         f"t: {_fmt(row.get('t_value'))}",
-        f"count: {_fmt(row.get('count'))}",
+        f"样本数: {_fmt(row.get('count'))}",
     ]
     return " | ".join(parts)
 
@@ -794,37 +809,37 @@ def _metrics_display_frame(metrics_df: pd.DataFrame) -> pd.DataFrame:
     if metrics_df.empty or not {"metric", "value"}.issubset(metrics_df.columns):
         return pd.DataFrame()
     name_map = {
-        "start": "Start",
-        "end": "End",
-        "total_return": "Total Return",
-        "annual_return": "Annual Return",
-        "annual_volatility": "Annual Vol",
-        "sharpe": "Sharpe",
-        "max_drawdown": "Max Drawdown",
+        "start": "开始日期",
+        "end": "结束日期",
+        "total_return": "总收益",
+        "annual_return": "年化收益",
+        "annual_volatility": "年化波动",
+        "sharpe": "夏普比率",
+        "max_drawdown": "最大回撤",
         "calmar": "Calmar",
-        "win_rate": "Win Rate",
-        "daily_mean": "Daily Mean",
-        "daily_std": "Daily Std",
-        "excess_return": "Excess Return",
-        "total_commission": "Commission",
-        "total_stamp_tax": "Stamp Tax",
-        "avg_turnover": "Avg Turnover",
-        "trade_count": "Trade Count",
-        "rankic_mean_from_step1": "Step1 RankIC Mean",
-        "auto_factor_direction": "Auto Direction",
-        "benchmark_status": "Benchmark",
-        "simulation_universe": "Universe",
-        "weight_method": "Weight Method",
-        "period": "Period",
-        "offset_count": "Offset Count",
+        "win_rate": "胜率",
+        "daily_mean": "日均收益",
+        "daily_std": "日收益标准差",
+        "excess_return": "超额收益",
+        "total_commission": "佣金",
+        "total_stamp_tax": "印花税",
+        "avg_turnover": "平均换手",
+        "trade_count": "交易次数",
+        "rankic_mean_from_step1": "Step1 RankIC 均值",
+        "auto_factor_direction": "自动方向",
+        "benchmark_status": "基准状态",
+        "simulation_universe": "股票池",
+        "weight_method": "加权方式",
+        "period": "周期",
+        "offset_count": "offset 数量",
     }
     rows = []
     for _, row in metrics_df.iterrows():
         metric = str(row["metric"])
         rows.append(
             {
-                "Metric": name_map.get(metric, metric),
-                "Value": _fmt_metric(metric, row["value"]),
+                "指标": name_map.get(metric, metric),
+                "数值": _fmt_metric(metric, row["value"]),
             }
         )
     return pd.DataFrame(rows)
@@ -834,15 +849,15 @@ def _return_summary(active_ret: pd.Series, all_ret: pd.Series) -> dict[str, str]
     active = pd.Series(active_ret, dtype=float).dropna()
     all_valid = pd.Series(all_ret, dtype=float).dropna()
     return {
-        "Active Mean": _fmt_pct(active.mean()) if not active.empty else "",
-        "All-Day Mean": _fmt_pct(all_valid.mean()) if not all_valid.empty else "",
-        "Active Days": f"{len(active):,}",
-        "Win Rate": _fmt_pct((active > 0).mean()) if not active.empty else "",
+        "持仓日均值": _fmt_pct(active.mean()) if not active.empty else "",
+        "全样本均值": _fmt_pct(all_valid.mean()) if not all_valid.empty else "",
+        "持仓天数": f"{len(active):,}",
+        "胜率": _fmt_pct((active > 0).mean()) if not active.empty else "",
     }
 
 
 def _summary_table_trace(summary: dict[str, str], x_domain: list[float], y_domain: list[float]) -> go.Table:
-    display = pd.DataFrame({"Metric": list(summary.keys()), "Value": list(summary.values())})
+    display = pd.DataFrame({"指标": list(summary.keys()), "数值": list(summary.values())})
     return go.Table(
         header=dict(
             values=list(display.columns),
@@ -862,8 +877,17 @@ def _summary_table_trace(summary: dict[str, str], x_domain: list[float], y_domai
 
 
 def _fmt_metric(metric: str, value) -> str:
-    if metric in {"start", "end", "auto_factor_direction", "benchmark_status", "weight_method", "period"}:
+    if metric in {"start", "end", "period"}:
         return "" if value is None or pd.isna(value) else str(value)
+    if metric == "auto_factor_direction":
+        mapping = {"small_is_better": "因子值小更优", "large_is_better": "因子值大更优"}
+        return mapping.get(str(value), "" if value is None or pd.isna(value) else str(value))
+    if metric == "benchmark_status":
+        mapping = {"found": "已找到"}
+        return mapping.get(str(value), "" if value is None or pd.isna(value) else str(value))
+    if metric == "weight_method":
+        mapping = {"equal": "等权", "market": "市值加权", "factor_softmax": "因子 softmax"}
+        return mapping.get(str(value), "" if value is None or pd.isna(value) else str(value))
     if metric in {"simulation_universe", "trade_count", "offset_count"}:
         numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
         if pd.notna(numeric):
