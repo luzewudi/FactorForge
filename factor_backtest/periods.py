@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """周期预运算工具。
 
-本模块负责把 EOD 交易日历转换为统一的换仓日布尔矩阵：
-- ``period.npy`` 保存周期名称，例如 ``5_0``、``20_19``、``W_4``。
-- ``period_dates.npy`` 保存 ``period x dates`` 的 True/False 矩阵。
-- ``dates.npy`` 保存和 EOD 对齐后的日期标签。
+本模块已经把 ``周期预运算（沈博文增强版）.py`` 中 FactorForge 需要的周期
+生成逻辑搬进来，后续不再依赖那个独立脚本。唯一的输入变化是：
+原脚本从指数 CSV 获取交易日，这里从 ``eod/dates.npy`` 获取交易日。
 
-实现口径参考 ``周期预运算（沈博文增强版）.py``，但不直接修改原脚本。
-核心思想是先为每个 ``周期_offset`` 生成“持仓周期编号”，再把编号变化的日期标记为换仓日。
+输出文件：
+- ``period.npy``：周期名称，例如 ``5_0``、``20_19``、``W_4``。
+- ``period_dates.npy``：``period x dates`` 的 True/False 换仓日矩阵。
+- ``dates.npy``：与 EOD 对齐的日期标签。
 """
 from __future__ import annotations
 
@@ -24,7 +25,6 @@ from .data_loader import decode_array, normalize_date_label
 def default_period_dict() -> dict[Any, list[Any]]:
     """返回默认预计算的周期与 offset 集合。"""
     return {
-        # 整数周期表示按交易日数量切分；N 日周期天然有 offset0 到 offsetN-1。
         1: [0],
         2: list(range(2)),
         3: list(range(3)),
@@ -33,14 +33,12 @@ def default_period_dict() -> dict[Any, list[Any]]:
         10: list(range(10)),
         20: list(range(20)),
         21: list(range(21)),
-        # 周频 offset0-4 对应自然周内不同换仓偏移，和原周期脚本保持一致。
-        "W": list(range(5)),
-        "2W": [0, 1],
+        "W": [0, 1, 2, 3, 4],
+        "2W": [0, 1, "0D", "1D", "2D", "3D", "4D", "7D", "8D", "9D", "10D", "11D"],
         "3W": [0, 1, 2],
         "4W": [0, 1, 2, 3],
         "5W": [0, 1, 2, 3, 4],
         "6W": [0, 1, 2, 3, 4, 5],
-        # M_-5 和 W53 是原脚本里的特殊约定，下面分别有单独处理逻辑。
         "M": [0, -5],
         "W53": [0],
     }
@@ -57,7 +55,6 @@ def load_period_files(period_path: Path) -> tuple[list[str], np.ndarray, list[st
         missing_text = ", ".join(str(path) for path in missing)
         raise FileNotFoundError(f"period files not found: {missing_text}")
 
-    # period.npy 允许 object/bytes/string 混合保存，这里统一成普通字符串列表。
     period_names = decode_array(np.load(names_path, allow_pickle=True))
     period_dates = np.load(mask_path, allow_pickle=False)
     dates = [normalize_date_label(x) for x in decode_array(np.load(dates_path, allow_pickle=True))]
@@ -81,9 +78,9 @@ def resolve_period_keys(period_names: list[str], period: Any, offsets: str | lis
 
     missing = [key for key in keys if key not in period_names]
     if missing:
-        sample = ", ".join(sort_period_keys(available)[:12])
+        sample = ", ".join(available[:12])
         raise ValueError(f"period keys not found: {missing}. Available for {base}: {sample}")
-    return sort_period_keys(keys)
+    return keys
 
 
 def format_period_key(period: Any, offset: Any) -> str:
@@ -92,39 +89,157 @@ def format_period_key(period: Any, offset: Any) -> str:
 
 
 def sort_period_keys(keys: list[str]) -> list[str]:
-    """按 offset 后缀排序；数字 offset 按数值排，字符串 offset 保持字典序。"""
-
-    def _key(value: str) -> tuple[int, int | str]:
-        suffix = value.split("_", 1)[1] if "_" in value else value
-        try:
-            return (0, int(suffix))
-        except ValueError:
-            return (1, suffix)
-
-    return sorted(keys, key=_key)
+    """保留兼容接口；周期文件本身已经按原脚本生成顺序排列。"""
+    return list(keys)
 
 
 def build_period_id_frame(dates: list[str], period_dict: dict[Any, list[Any]] | None = None, min_day: int = 2) -> pd.DataFrame:
     """根据 EOD 交易日生成各周期 offset 的“持仓周期编号”宽表。"""
     period_dict = period_dict or default_period_dict()
-    # base 只使用真实交易日，不使用离线节假日推断，确保和 EOD 面板完全对齐。
-    base = pd.DataFrame({"trade_date": pd.to_datetime(dates, format="%Y%m%d")})
-    base["is_trade"] = 1
-    base["period_end"] = base["trade_date"]
-    out = base[["trade_date"]].copy()
+    index_data = pd.DataFrame({"交易日期": pd.to_datetime(dates, format="%Y%m%d")})
+    index_data.sort_values(by=["交易日期"], ascending=True, ignore_index=True, inplace=True)
+    raw = calc_period_and_offset(period_dict, index_data, min_day=min_day)
+    return _align_period_frame(raw, index_data["交易日期"])
 
-    for period_type, offsets in period_dict.items():
-        if period_type == "W53":
-            out = out.merge(_w53_period_ids(base), on="trade_date", how="left")
+
+def calc_period_and_offset(period_dict: dict[Any, list[Any]], _index_data: pd.DataFrame, min_day: int = 2) -> pd.DataFrame:
+    """按原脚本 ``calc_period_and_offset`` 的周期逻辑生成周期编号宽表。
+
+    与原脚本相比这里只删除了 ``TradeCalendar`` 补未来交易日的部分，因为本项目要求
+    严格使用 ``eod/dates.npy`` 作为交易日历。除此之外，W、M、M_-5、W53、短周期合并、
+    ``expanding().sum().shift()`` 等处理均保留原脚本口径。
+    """
+    _index_data = _index_data.copy()
+    _index_data["交易日期"] = pd.to_datetime(_index_data["交易日期"])
+    _index_data.sort_values(by=["交易日期"], ascending=True, ignore_index=True, inplace=True)
+    _index_data["是否交易"] = 1
+    _index_data["周期最后交易日"] = _index_data["交易日期"]
+    all_period_offst_df = _index_data[["交易日期"]].copy()
+
+    agg_dict = {"周期最后交易日": "last", "是否交易": "sum"}
+
+    for period_type in period_dict:
+        if period_type in ["W53"]:
+            index_data = _index_data.copy()
+            start_date = index_data["交易日期"].min()
+            end_date = index_data["交易日期"].max()
+
+            # 第一步：先把 W_3 算一遍，目的和原脚本一致，是把周三周期末定义出来。
+            index_data["交易日期"] -= pd.to_timedelta("3D")
+            index_data.loc[index_data.index.max() + 1, "交易日期"] = pd.to_datetime("1990-01-01")
+            index_data.set_index("交易日期", inplace=True)
+            period_df = index_data.resample(rule="W").agg(agg_dict)
+            period_df.rename(columns={"是否交易": "交易天数"}, inplace=True)
+            period_df = period_df[period_df["交易天数"] > 0]
+            period_df.reset_index(drop=True, inplace=True)
+            period_df.rename(columns={"周期最后交易日": "交易日期"}, inplace=True)
+            period_df["W53"] = 1
+
+            df = pd.merge(_index_data[["交易日期"]].copy(), right=period_df[["交易日期", "W53"]], on="交易日期", how="left")
+            df["W53_0"] = df["W53"].expanding().sum().shift()
+
+            # 第二步：把所有周四标记为 None。
+            date_range_df = pd.DataFrame(pd.date_range(start=start_date, end=end_date, freq="D"), columns=["交易日期"])
+            date_range_df["周期最后交易日"] = date_range_df["交易日期"].copy()
+            date_range_df["交易日期"] -= pd.to_timedelta("4D")
+            date_range_df.loc[date_range_df.index.max() + 1, "交易日期"] = pd.to_datetime("1990-01-01")
+            date_range_df.set_index("交易日期", inplace=True)
+            period_df = date_range_df.resample(rule="W").agg({"周期最后交易日": "last"})
+            df.loc[df["交易日期"].isin(period_df["周期最后交易日"]), "W53_0"] = None
+
+            # 第三步：单交易日周期不满足 T+1，设置为 None。
+            counts = df["W53_0"].value_counts()
+            single_occurrence_values = counts[counts == 1].index
+            df.loc[df["W53_0"].isin(single_occurrence_values), "W53_0"] = None
+
+            # 第四步：None 做 ffill 后取负，保留原脚本的名义周期标记。
+            df["_W53"] = df["W53_0"].copy()
+            df["W53_0"] = df["W53_0"].ffill()
+            df.loc[pd.isnull(df["_W53"]), "W53_0"] = -df["W53_0"]
+            all_period_offst_df = pd.merge(
+                left=all_period_offst_df,
+                right=df[["交易日期", "W53_0"]],
+                on="交易日期",
+                how="left",
+            )
             continue
-        for offset in offsets:
-            col = format_period_key(period_type, offset)
-            ids = _single_period_ids(base, period_type, offset, min_day=min_day)
-            out = out.merge(ids[["trade_date", col]], on="trade_date", how="left")
 
-    # 原脚本头部未进入第一个完整周期的日期会填 0，这里沿用同一口径。
-    out.fillna(0, inplace=True)
-    return out
+        for offset in period_dict[period_type]:
+            index_data = _index_data.copy()
+            if type(period_type) == int:
+                index_data["group"] = pd.Series((index_data.index - offset) / period_type).apply(int)
+                period_df = index_data.groupby("group").agg(agg_dict)
+                period_df["交易天数"] = period_type
+            else:
+                if (period_type == "M") and (offset == -5):
+                    start_date = index_data["交易日期"].min()
+                    end_date = index_data["交易日期"].max()
+                    date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+                    index_data = index_data.set_index("交易日期").reindex(date_range).reset_index()
+                    index_data.rename(columns={"index": "交易日期"}, inplace=True)
+                    index_data["周期最后交易日"] = index_data["周期最后交易日"].ffill()
+                    index_data["是否交易"] = index_data["是否交易"].fillna(value=0)
+
+                    date_range_m = pd.DataFrame(pd.date_range(start=start_date, end=end_date, freq="M"), columns=["交易日期"])
+                    date_range_m["月末"] = 1
+                    index_data = pd.merge(left=index_data, right=date_range_m, on="交易日期", how="left")
+                    index_data.loc[(index_data["月末"] == 1) & (index_data["是否交易"].shift(-1) == 0), "是否交易"] = 0
+                    index_data = index_data[index_data["是否交易"] == 0]
+                    index_data.set_index("交易日期", inplace=True)
+                    period_df = index_data.resample(rule=period_type).agg(agg_dict)
+                    period_df["交易天数"] = 20
+                else:
+                    if (lambda s: any(char.isdigit() for char in s))(period_type):
+                        if isinstance(offset, str) and "D" in offset.upper():
+                            offset = offset.upper()
+                            index_data["交易日期"] -= pd.to_timedelta(offset)
+                        else:
+                            index_data["交易日期"] -= pd.to_timedelta(f"{offset * 7}D")
+                    else:
+                        index_data["交易日期"] -= pd.to_timedelta(f"{offset}D")
+
+                    index_data.loc[index_data.index.max() + 1, "交易日期"] = pd.to_datetime("1990-01-01")
+                    index_data.set_index("交易日期", inplace=True)
+                    period_df = index_data.resample(rule=period_type).agg(agg_dict)
+                    period_df.rename(columns={"是否交易": "交易天数"}, inplace=True)
+
+            period_df = period_df[period_df["交易天数"] > 0]
+
+            index_to_remove = []
+            add_num = 0
+            for index, row in period_df.iterrows():
+                period_df.at[index, "交易天数"] += add_num
+                add_num = 0
+                if row["交易天数"] < min_day:
+                    index_to_remove.append(index)
+                    add_num = row["交易天数"]
+            period_df = period_df.drop(index_to_remove)
+
+            period_df.reset_index(drop=True, inplace=True)
+            period_df.rename(columns={"周期最后交易日": "交易日期"}, inplace=True)
+            period_df[f"{period_type}_{offset}"] = 1
+            all_period_offst_df = pd.merge(
+                left=all_period_offst_df,
+                right=period_df[["交易日期", f"{period_type}_{offset}"]],
+                on="交易日期",
+                how="left",
+            )
+            all_period_offst_df[f"{period_type}_{offset}"] = all_period_offst_df[f"{period_type}_{offset}"].expanding().sum().shift()
+
+    all_period_offst_df.fillna(value=0, inplace=True)
+    return all_period_offst_df
+
+
+def _align_period_frame(raw: pd.DataFrame, target_dates: pd.Series) -> pd.DataFrame:
+    """把周期编号宽表整理成与 ``eod/dates.npy`` 一日一行的输出。"""
+    out = raw.copy()
+    out["交易日期"] = pd.to_datetime(out["交易日期"])
+    # M_-5 在极少数月末场景可能让同一交易日出现两行；npy 矩阵必须和 EOD 日期一一对应。
+    out = out.drop_duplicates(subset=["交易日期"], keep="last")
+    aligned = pd.DataFrame({"交易日期": pd.to_datetime(target_dates)})
+    aligned = aligned.merge(out, on="交易日期", how="left")
+    aligned.fillna(value=0, inplace=True)
+    return aligned.rename(columns={"交易日期": "trade_date"})
 
 
 def build_period_rebalance_matrix(dates: list[str], period_dict: dict[Any, list[Any]] | None = None) -> tuple[list[str], np.ndarray]:
@@ -132,11 +247,9 @@ def build_period_rebalance_matrix(dates: list[str], period_dict: dict[Any, list[
     ids = build_period_id_frame(dates, period_dict=period_dict)
     period_names = [col for col in ids.columns if col != "trade_date"]
     values = ids[period_names].to_numpy(dtype=float)
-    # 周期编号从上一交易日变到当前交易日，说明当前交易日是该 offset 的调仓日。
     previous = np.vstack([np.zeros((1, values.shape[1])), values[:-1]])
     rebalance = (values != previous) & (values != 0)
     if rebalance.shape[0] > 0:
-        # 首日没有上一交易日因子，强制不换仓，避免未来函数。
         rebalance[0, :] = False
     return period_names, rebalance.T.astype(bool, copy=False)
 
@@ -149,7 +262,6 @@ def save_period_files(eod_path: Path, period_path: Path) -> tuple[Path, Path, Pa
     dates = [normalize_date_label(x) for x in decode_array(np.load(eod_path / "dates.npy", allow_pickle=True))]
     period_names, rebalance = build_period_rebalance_matrix(dates)
 
-    # 文件放在仓库外的数据目录，代码只负责生成和读取，不把大数据纳入 git。
     names_path = period_path / "period.npy"
     mask_path = period_path / "period_dates.npy"
     dates_path = period_path / "dates.npy"
@@ -157,143 +269,3 @@ def save_period_files(eod_path: Path, period_path: Path) -> tuple[Path, Path, Pa
     np.save(mask_path, rebalance)
     np.save(dates_path, np.asarray(dates, dtype="S8"))
     return names_path, mask_path, dates_path
-
-
-def _single_period_ids(base: pd.DataFrame, period_type: Any, offset: Any, min_day: int) -> pd.DataFrame:
-    """生成单个 ``周期_offset`` 的持仓周期编号。"""
-    data = base.copy()
-    col = format_period_key(period_type, offset)
-    agg_dict = {"period_end": "last", "is_trade": "sum"}
-
-    if isinstance(period_type, int):
-        # 整数周期直接按交易日序号切组；offset 决定从第几个交易日开始错位。
-        index = np.arange(len(data), dtype=float)
-        data["group"] = np.trunc((index - int(offset)) / period_type).astype(int)
-        period_df = data.groupby("group").agg(agg_dict)
-        period_df.rename(columns={"is_trade": "trading_days"}, inplace=True)
-        period_df["trading_days"] = max(int(period_type), min_day)
-    else:
-        period_text = str(period_type).upper()
-        if period_text == "M" and str(offset) == "-5":
-            # M_-5 是原脚本特殊月频口径：用自然日补齐后处理月末附近非交易日。
-            period_df = _month_minus_five_periods(data)
-        else:
-            # 周频/月频通过移动日期后 resample，使 pandas 的周期末落到目标换仓日。
-            data = _shift_trade_dates(data, period_text, offset)
-            data.loc[data.index.max() + 1, "trade_date"] = pd.to_datetime("1990-01-01")
-            data.set_index("trade_date", inplace=True)
-            period_df = data.resample(rule=_pandas_resample_rule(period_text)).agg(agg_dict)
-            period_df.rename(columns={"is_trade": "trading_days"}, inplace=True)
-
-    period_df = period_df[period_df["trading_days"] > 0]
-    period_df = _merge_short_periods(period_df, min_day=min_day)
-    period_df.reset_index(drop=True, inplace=True)
-    period_df.rename(columns={"period_end": "trade_date"}, inplace=True)
-    # 某些特殊月末可能映射到同一个交易日，保留最后一条，保证输出和 EOD 日期一一对应。
-    period_df = period_df.dropna(subset=["trade_date"]).drop_duplicates(subset=["trade_date"], keep="last")
-    period_df[col] = 1
-
-    out = base[["trade_date"]].merge(period_df[["trade_date", col]], on="trade_date", how="left")
-    # expanding().sum().shift() 是原脚本的关键口径：
-    # 当天的编号代表“今天开盘后持有的周期”，编号变化发生在下一交易日可见。
-    out[col] = out[col].expanding().sum().shift()
-    return out
-
-
-def _shift_trade_dates(data: pd.DataFrame, period_text: str, offset: Any) -> pd.DataFrame:
-    """按原脚本规则移动日期，让 resample 的周期边界落到指定 offset。"""
-    if any(char.isdigit() for char in period_text):
-        if isinstance(offset, str) and "D" in offset.upper():
-            # 兼容 2W 的 0D/1D 等自然日 offset 写法。
-            data["trade_date"] -= pd.to_timedelta(offset.upper())
-        else:
-            # nW 的整数 offset 按“周”错位，和原脚本保持一致。
-            data["trade_date"] -= pd.to_timedelta(f"{int(offset) * 7}D")
-    else:
-        # W 的 offset0-4 直接按自然日移动，约定对应周内不同交易日。
-        data["trade_date"] -= pd.to_timedelta(f"{int(offset)}D")
-    return data
-
-
-def _pandas_resample_rule(period_text: str) -> str:
-    """把公开周期名转换成当前 pandas 推荐的 resample 频率名。"""
-    return "ME" if period_text == "M" else period_text
-
-
-def _month_minus_five_periods(data: pd.DataFrame) -> pd.DataFrame:
-    """处理原脚本中的 ``M_-5`` 月频特殊口径。"""
-    start_date = data["trade_date"].min()
-    end_date = data["trade_date"].max()
-    # 先补齐自然日，再用 period_end 前向填充，才能判断自然月末和非交易日关系。
-    natural = data.set_index("trade_date").reindex(pd.date_range(start=start_date, end=end_date, freq="D")).reset_index()
-    natural.rename(columns={"index": "trade_date"}, inplace=True)
-    natural["period_end"] = natural["period_end"].ffill()
-    natural["is_trade"] = natural["is_trade"].fillna(value=0)
-
-    month_end = pd.DataFrame({"trade_date": pd.date_range(start=start_date, end=end_date, freq="ME")})
-    month_end["month_end"] = 1
-    natural = natural.merge(month_end, on="trade_date", how="left")
-    # 如果自然月末是交易日且次日非交易，则把该自然月末当作周期边界处理。
-    natural.loc[(natural["month_end"] == 1) & (natural["is_trade"].shift(-1) == 0), "is_trade"] = 0
-    natural = natural[natural["is_trade"] == 0].set_index("trade_date")
-    period_df = natural.resample(rule="ME").agg({"period_end": "last", "is_trade": "sum"})
-    period_df["trading_days"] = 20
-    return period_df
-
-
-def _merge_short_periods(period_df: pd.DataFrame, min_day: int) -> pd.DataFrame:
-    """把交易天数过短的周期并入下一周期，避免 T+1 下无法完成买卖。"""
-    to_remove = []
-    add_num = 0
-    for index, row in period_df.iterrows():
-        period_df.at[index, "trading_days"] += add_num
-        add_num = 0
-        if row["trading_days"] < min_day:
-            to_remove.append(index)
-            add_num = row["trading_days"]
-    return period_df.drop(to_remove)
-
-
-def _w53_period_ids(base: pd.DataFrame) -> pd.DataFrame:
-    """生成 ``W53_0`` 特殊周期编号。
-
-    ``W53`` 来自原脚本里的“周五买、周三卖”口径：周三作为实际卖出边界，
-    周四属于名义周期但收益在下游会按负编号特殊处理。
-    """
-    col = "W53_0"
-    data = base.copy()
-    start_date = data["trade_date"].min()
-    end_date = data["trade_date"].max()
-
-    shifted = data.copy()
-    # 第一步：先用周三作为周期末，找出实际卖出日。
-    shifted["trade_date"] -= pd.to_timedelta("3D")
-    shifted.loc[shifted.index.max() + 1, "trade_date"] = pd.to_datetime("1990-01-01")
-    shifted.set_index("trade_date", inplace=True)
-    period_df = shifted.resample(rule="W").agg({"period_end": "last", "is_trade": "sum"})
-    period_df.rename(columns={"is_trade": "trading_days"}, inplace=True)
-    period_df = period_df[period_df["trading_days"] > 0].reset_index(drop=True)
-    period_df.rename(columns={"period_end": "trade_date"}, inplace=True)
-    period_df["W53"] = 1
-
-    out = base[["trade_date"]].merge(period_df[["trade_date", "W53"]], on="trade_date", how="left")
-    out[col] = out["W53"].expanding().sum().shift()
-
-    # 第二步：找出自然周四，并把这些日期标记为空，后面转成负周期编号。
-    natural = pd.DataFrame({"trade_date": pd.date_range(start=start_date, end=end_date, freq="D")})
-    natural["period_end"] = natural["trade_date"]
-    natural["trade_date"] -= pd.to_timedelta("4D")
-    natural.loc[natural.index.max() + 1, "trade_date"] = pd.to_datetime("1990-01-01")
-    natural.set_index("trade_date", inplace=True)
-    thursday_df = natural.resample(rule="W").agg({"period_end": "last"})
-    out.loc[out["trade_date"].isin(thursday_df["period_end"]), col] = None
-
-    # 第三步：单交易日周期无法满足 T+1，剔除后交给下一周期承接。
-    counts = out[col].value_counts()
-    single_values = counts[counts == 1].index
-    out.loc[out[col].isin(single_values), col] = None
-    marker = out[col].copy()
-    # 第四步：空值日期继承上一个周期编号并取负，保留“名义持有但实际不计收益”的标记。
-    out[col] = out[col].ffill()
-    out.loc[pd.isnull(marker), col] = -out[col]
-    return out[["trade_date", col]]
