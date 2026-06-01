@@ -16,6 +16,10 @@ htmlcov/
 venv/
 env/
 
+config/*.yaml
+!config/config.yaml
+!config/kaiyuan.yaml
+
 logs/
 *.log
 

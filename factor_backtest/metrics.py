@@ -92,31 +92,12 @@ def annual_ic_stats(ic: pd.Series, rankic: pd.Series, annualization_factor: floa
             row = {"period": str(year), "series": label}
             stats_row = series_stats(part, annualization_factor=annualization_factor)
             row.update(stats_row)
-            row.update(_explicit_icir_columns(label, stats_row))
             rows.append(row)
         row = {"period": "TOTAL", "series": label}
         stats_row = series_stats(series, annualization_factor=annualization_factor)
         row.update(stats_row)
-        row.update(_explicit_icir_columns(label, stats_row))
         rows.append(row)
     return pd.DataFrame(rows)
-
-
-def _explicit_icir_columns(label: str, stats_row: dict[str, float]) -> dict[str, float]:
-    """补充明确命名的 ICIR/RankICIR 列，避免只看到通用 ir 字段时误读。"""
-    out = {
-        "ICIR": np.nan,
-        "Annualized_ICIR": np.nan,
-        "RankICIR": np.nan,
-        "Annualized_RankICIR": np.nan,
-    }
-    if label == "IC":
-        out["ICIR"] = stats_row["ir"]
-        out["Annualized_ICIR"] = stats_row["annualized_ir"]
-    elif label == "RankIC":
-        out["RankICIR"] = stats_row["ir"]
-        out["Annualized_RankICIR"] = stats_row["annualized_ir"]
-    return out
 
 
 def rolling_t_value(series: pd.Series, window: int = 252, min_periods: int = 21) -> pd.Series:
