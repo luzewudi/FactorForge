@@ -1,6 +1,7 @@
 paths:
   # 基础数据路径沿用默认项目配置。
   eod_path: "D:/凯纳/原始数据/eod"
+  period_path: "D:/凯纳/原始数据/period"
   fund_path: "D:/凯纳/原始数据/fundmental"
   data_fund_path: "D:/凯纳/原始数据/shared/FactorBank/data_fund"
   label_path: "D:/凯纳/原始数据/label"
@@ -14,6 +15,10 @@ analysis:
   start_date: "20190101"
   end_date: "20241231"
   turnover: 1
+  period: 1
+  offsets: all
+  offset_mode: ensemble
+  label_days: 1
   per_divide_num: 10
   universe: "0"
   benchmark: "000985"
@@ -39,6 +44,9 @@ simulation:
   stamp_duty: 0.001
   initial_capital: 10000000
   rebalance_freq_days: 1
+  period: 1
+  offsets: all
+  offset_mode: ensemble
   trade_price: vwap
   benchmark: "000985"
   slippage: 0.0

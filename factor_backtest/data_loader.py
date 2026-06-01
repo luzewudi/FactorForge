@@ -112,6 +112,34 @@ class BacktestData:
             raise ValueError(f"empty date window: {start_date} to {end_date}")
         return DateWindow(start=start, end=end, dates=self.dates[start:end])
 
+    def load_period_masks(
+        self,
+        period: str,
+        offsets: str | list[str],
+        window: DateWindow,
+    ) -> dict[str, np.ndarray]:
+        """读取 period 预运算结果，并按当前日期窗口返回每个 offset 的调仓日掩码。"""
+        from .periods import load_period_files, resolve_period_keys
+
+        period_names, period_dates, period_file_dates = load_period_files(self.config.paths.period_path)
+        keys = resolve_period_keys(period_names, period, offsets)
+        name_to_row = {name: idx for idx, name in enumerate(period_names)}
+        date_to_col = {date: idx for idx, date in enumerate(period_file_dates)}
+        missing_dates = [date for date in window.dates if date not in date_to_col]
+        if missing_dates:
+            raise ValueError(
+                f"period dates are not aligned with EOD dates. Missing examples: {missing_dates[:5]}"
+            )
+
+        cols = np.array([date_to_col[date] for date in window.dates], dtype=int)
+        out: dict[str, np.ndarray] = {}
+        for key in keys:
+            mask = np.asarray(period_dates[name_to_row[key], cols], dtype=bool)
+            if len(mask) > 0:
+                mask[0] = False
+            out[key] = mask
+        return out
+
     def npy(self, path: Path, mmap: bool = True) -> np.ndarray:
         """带缓存读取 npy；默认使用 mmap，避免大矩阵反复完整载入内存。"""
         path = Path(path)

@@ -1,6 +1,7 @@
 paths:
   # 日频行情、财务数据、行业/市值等基础数据路径。
   eod_path: "D:/凯纳/原始数据/eod"
+  period_path: "D:/凯纳/原始数据/period"
   fund_path: "D:/凯纳/原始数据/fundmental"
   data_fund_path: "D:/凯纳/原始数据/shared/FactorBank/data_fund"
   # label_path 按 trade_price + turnover 自动匹配，例如 vwap_1d.npy。
@@ -16,6 +17,10 @@ analysis:
   start_date: "20200102"
   end_date: "20241231"
   turnover: 1
+  period: 1
+  offsets: all
+  offset_mode: ensemble
+  label_days: 1
   per_divide_num: 5
   universe: "0"
   benchmark: "000852"
@@ -41,6 +46,9 @@ simulation:
   stamp_duty: 0.001
   initial_capital: 10000000
   rebalance_freq_days: 1
+  period: 1
+  offsets: all
+  offset_mode: ensemble
   trade_price: vwap
   benchmark: "000852"
   slippage: 0.0

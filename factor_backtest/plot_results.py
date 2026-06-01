@@ -65,6 +65,7 @@ def write_simulation_html(
     trades_df: pd.DataFrame,
     selections_df: pd.DataFrame,
     selection_profile_df: pd.DataFrame | None = None,
+    offset_nav_df: pd.DataFrame | None = None,
 ) -> None:
     """生成单因子 Step2 HTML，集中展示资金曲线、回撤、换手、指标和最近交易。"""
     out_path = Path(out_path)
@@ -75,6 +76,7 @@ def write_simulation_html(
 
     figs = [
         _simulation_equity_figure(factor_name, nav_df, metrics_df),
+        _simulation_offset_nav_figure(offset_nav_df),
         _simulation_daily_return_figure(nav_df),
         _simulation_turnover_figure(nav_df),
         _selection_profile_figure(selection_profile_df),
@@ -467,6 +469,71 @@ def _simulation_equity_figure(factor_name: str, nav_df: pd.DataFrame, metrics_df
     return fig
 
 
+def _simulation_offset_nav_figure(offset_nav_df: pd.DataFrame | None) -> go.Figure | None:
+    if offset_nav_df is None or offset_nav_df.empty:
+        return None
+    strategy_cols = [col for col in offset_nav_df.columns if str(col) != "benchmark_nav"]
+    if not strategy_cols:
+        return None
+
+    fig = go.Figure()
+    colors = [
+        "#1F77B4",
+        "#FF7F0E",
+        "#2CA02C",
+        "#D62728",
+        "#9467BD",
+        "#8C564B",
+        "#E377C2",
+        "#7F7F7F",
+        "#BCBD22",
+        "#17BECF",
+    ]
+    for idx, col in enumerate(strategy_cols):
+        fig.add_trace(
+            go.Scatter(
+                x=offset_nav_df.index,
+                y=offset_nav_df[col],
+                name=str(col),
+                line=dict(width=1.45, color=colors[idx % len(colors)]),
+                opacity=0.82,
+            )
+        )
+    if "benchmark_nav" in offset_nav_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=offset_nav_df.index,
+                y=offset_nav_df["benchmark_nav"],
+                name="benchmark_nav",
+                line=dict(color="#111827", width=2.6, dash="dash"),
+            )
+        )
+    fig.update_layout(
+        template="plotly_white",
+        width=1500,
+        height=560,
+        title={"text": "所有 offset 净值对比", "x": 0.38, "xanchor": "center"},
+        xaxis=dict(domain=[0.0, 0.78], showspikes=True, spikemode="across+marker", gridcolor="#EEF2F7"),
+        yaxis=dict(title="NAV", tickformat=".3f", gridcolor="#E5ECF6"),
+        legend=dict(
+            x=0.805,
+            y=1.0,
+            xanchor="left",
+            yanchor="top",
+            bgcolor="rgba(255,255,255,0.88)",
+            bordercolor="#D8DEE9",
+            borderwidth=1,
+            itemclick="toggle",
+            itemdoubleclick="toggleothers",
+        ),
+        hovermode="x unified",
+        margin=dict(l=70, r=35, t=85, b=55),
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+    )
+    return fig
+
+
 def _simulation_daily_return_figure(nav_df: pd.DataFrame) -> go.Figure | None:
     if nav_df.empty or "strategy_nav" not in nav_df.columns:
         return None
@@ -748,6 +815,8 @@ def _metrics_display_frame(metrics_df: pd.DataFrame) -> pd.DataFrame:
         "benchmark_status": "Benchmark",
         "simulation_universe": "Universe",
         "weight_method": "Weight Method",
+        "period": "Period",
+        "offset_count": "Offset Count",
     }
     rows = []
     for _, row in metrics_df.iterrows():
@@ -793,9 +862,9 @@ def _summary_table_trace(summary: dict[str, str], x_domain: list[float], y_domai
 
 
 def _fmt_metric(metric: str, value) -> str:
-    if metric in {"start", "end", "auto_factor_direction", "benchmark_status", "weight_method"}:
+    if metric in {"start", "end", "auto_factor_direction", "benchmark_status", "weight_method", "period"}:
         return "" if value is None or pd.isna(value) else str(value)
-    if metric in {"simulation_universe", "trade_count"}:
+    if metric in {"simulation_universe", "trade_count", "offset_count"}:
         numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
         if pd.notna(numeric):
             return f"{int(numeric):,}"

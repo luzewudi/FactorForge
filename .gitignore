@@ -41,6 +41,8 @@ reports/
 *.zip
 *.7z
 *.rar
+*.npy
+*.npz
 
 *_report.html
 quantstats_report.html

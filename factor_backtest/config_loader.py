@@ -63,6 +63,7 @@ class PathConfig:
     label_path: Path
     factor_folder: Path
     output_folder: Path
+    period_path: Path
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "PathConfig":
@@ -78,7 +79,9 @@ class PathConfig:
         missing = [key for key in required if not raw.get(key)]
         if missing:
             raise ValueError(f"paths missing required keys: {', '.join(missing)}")
-        return cls(**{key: Path(raw[key]) for key in required})
+        values = {key: Path(raw[key]) for key in required}
+        values["period_path"] = Path(raw.get("period_path") or (values["eod_path"].parent / "period"))
+        return cls(**values)
 
 
 @dataclass
@@ -107,6 +110,10 @@ class AnalysisConfig:
     end_date: str
     factors: str | List[str] = "all"
     turnover: int = 1
+    period: str = "1"
+    offsets: str | List[str] = "all"
+    offset_mode: str = "ensemble"
+    label_days: int = 1
     per_divide_num: int = 5
     universe: str = "0"
     benchmark: str = "000852"
@@ -118,11 +125,17 @@ class AnalysisConfig:
     @classmethod
     def from_dict(cls, raw: dict[str, Any], default_factors: str | List[str] = "all") -> "AnalysisConfig":
         """读取 analysis 模块，定义 Step1 因子研究需要的日期、分组、基准和中性化口径。"""
+        period = normalize_period(raw.get("period", raw.get("turnover", 1)))
+        label_days = int(raw.get("label_days", raw.get("turnover", period_to_label_days(period))))
         return cls(
             start_date=normalize_date(raw.get("start_date"), "analysis.start_date"),
             end_date=normalize_date(raw.get("end_date"), "analysis.end_date"),
             factors=normalize_factors(raw.get("factors", default_factors)),
-            turnover=int(raw.get("turnover", 1)),
+            turnover=int(raw.get("turnover", label_days)),
+            period=period,
+            offsets=normalize_offsets(raw.get("offsets", "all")),
+            offset_mode=str(raw.get("offset_mode", "ensemble")).strip().lower(),
+            label_days=label_days,
             per_divide_num=int(raw.get("per_divide_num", 5)),
             universe=str(raw.get("universe", "0")),
             benchmark=str(raw.get("benchmark", "000852")),
@@ -143,6 +156,9 @@ class SimulationConfig:
     stamp_duty: float = 0.001
     initial_capital: float = 10_000_000.0
     rebalance_freq_days: int = 1
+    period: str = "1"
+    offsets: str | List[str] = "all"
+    offset_mode: str = "ensemble"
     trade_price: str = "vwap"
     benchmark: str = "000852"
     slippage: float = 0.0
@@ -156,6 +172,8 @@ class SimulationConfig:
         default_factors: str | List[str] = "all",
     ) -> "SimulationConfig":
         """读取 simulation 模块，定义 Step2 真实账户模拟的选股、费用、滑点和调仓口径。"""
+        period = normalize_period(raw.get("period", raw.get("rebalance_freq_days", 1)))
+        rebalance_freq_days = int(raw.get("rebalance_freq_days", period_to_label_days(period)))
         return cls(
             factors=normalize_factors(raw.get("factors", default_factors)),
             universe=str(raw.get("universe", analysis.universe)),
@@ -164,7 +182,10 @@ class SimulationConfig:
             fee=float(raw.get("fee", 0.0003)),
             stamp_duty=float(raw.get("stamp_duty", 0.001)),
             initial_capital=float(raw.get("initial_capital", 10_000_000.0)),
-            rebalance_freq_days=int(raw.get("rebalance_freq_days", 1)),
+            rebalance_freq_days=rebalance_freq_days,
+            period=period,
+            offsets=normalize_offsets(raw.get("offsets", "all")),
+            offset_mode=str(raw.get("offset_mode", "ensemble")).strip().lower(),
             trade_price=str(raw.get("trade_price", analysis.trade_price)).lower(),
             benchmark=str(raw.get("benchmark", analysis.benchmark)),
             slippage=float(raw.get("slippage", 0.0)),
@@ -212,6 +233,61 @@ def normalize_factors(raw: Any) -> str | List[str]:
     raise ValueError("factors must be 'all' or a list of factor names")
 
 
+def normalize_period(raw: Any) -> str:
+    """把 period 配置标准化成周期名前缀，例如 5、20、W、2W、M。"""
+    if raw is None:
+        return "1"
+    if isinstance(raw, (int, float)) and float(raw).is_integer():
+        return str(int(raw))
+    text = str(raw).strip()
+    if not text:
+        return "1"
+    if text.replace(".", "", 1).isdigit() and float(text).is_integer():
+        return str(int(float(text)))
+    return text.upper()
+
+
+def normalize_offsets(raw: Any) -> str | List[str]:
+    """解析 offsets 配置；all 表示使用该 period 下全部 offset。"""
+    if raw is None:
+        return "all"
+    if isinstance(raw, str):
+        text = raw.strip()
+        return "all" if text.lower() == "all" else [normalize_offset_label(text)]
+    if isinstance(raw, Sequence):
+        values = [normalize_offset_label(item) for item in raw if str(item).strip()]
+        return values or "all"
+    return [normalize_offset_label(raw)]
+
+
+def normalize_offset_label(raw: Any) -> str:
+    """把 offset 配置标准化成 period 文件里的后缀。"""
+    if isinstance(raw, (int, float)) and float(raw).is_integer():
+        return str(int(raw))
+    text = str(raw).strip()
+    if text.replace("-", "", 1).replace(".", "", 1).isdigit() and float(text).is_integer():
+        return str(int(float(text)))
+    return text.upper()
+
+
+def period_to_label_days(period: str) -> int:
+    """非日频周期没有天然 label 文件名时，提供常用交易日近似。"""
+    text = normalize_period(period)
+    if text.isdigit():
+        return int(text)
+    aliases = {
+        "W": 5,
+        "2W": 10,
+        "3W": 15,
+        "4W": 20,
+        "5W": 25,
+        "6W": 30,
+        "M": 20,
+        "W53": 5,
+    }
+    return aliases.get(text, 1)
+
+
 def strip_npy_suffix(name: str) -> str:
     """去掉因子名末尾的 .npy，保证 YAML 中写不写后缀都能找到同一个文件。"""
     return name[:-4] if name.lower().endswith(".npy") else name
@@ -242,6 +318,10 @@ def validate_config(paths: PathConfig, analysis: AnalysisConfig, simulation: Sim
         raise ValueError("analysis.start_date must be <= analysis.end_date")
     if analysis.turnover <= 0:
         raise ValueError("analysis.turnover must be positive")
+    if analysis.label_days <= 0:
+        raise ValueError("analysis.label_days must be positive")
+    if analysis.offset_mode != "ensemble":
+        raise ValueError("analysis.offset_mode currently supports only ensemble")
     if analysis.per_divide_num <= 1:
         raise ValueError("analysis.per_divide_num must be > 1")
     if analysis.trade_price not in {"open", "close", "vwap", "periodvwap", "period_vwap"}:
@@ -252,6 +332,8 @@ def validate_config(paths: PathConfig, analysis: AnalysisConfig, simulation: Sim
         raise ValueError("analysis.neutralization must be none, market, or industry_market")
     if simulation.rebalance_freq_days <= 0:
         raise ValueError("simulation.rebalance_freq_days must be positive")
+    if simulation.offset_mode != "ensemble":
+        raise ValueError("simulation.offset_mode currently supports only ensemble")
     if simulation.trade_price not in {"open", "close", "vwap", "periodvwap", "period_vwap"}:
         raise ValueError("simulation.trade_price must be open, close, vwap, or periodvwap")
     if simulation.weight_method not in {"equal", "market", "factor_softmax"}:

@@ -38,6 +38,7 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
     # Step2：读取成交价、估值价、交易状态、涨跌停和复利基准净值。
     # simulation.universe 是真实账户模拟的独立股票池，允许和 Step1 因子分析股票池不同。
     universe = data.load_universe(config.simulation.universe, window)
+    period_masks = data.load_period_masks(config.simulation.period, config.simulation.offsets, window)
     trade_status = data.load_eod_panel("TradeStatus.npy", window)
     trade_prices, close_prices, limit_status = data.load_simulation_price_panels(config.simulation.trade_price, window)
     benchmark_nav = data.load_benchmark_nav(config.simulation.benchmark, window, compound=True)
@@ -57,7 +58,7 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
     logger.info(f"[step2] 共发现 {total_factors} 个因子，开始逐个模拟回测。")
     logger.info(
         f"[step2] 股票池={config.simulation.universe}，选股数量={config.simulation.select_n}，"
-        f"调仓周期={config.simulation.rebalance_freq_days}日，加权方法={config.simulation.weight_method}。"
+        f"周期={config.simulation.period}，offset数={len(period_masks)}，加权方法={config.simulation.weight_method}。"
     )
     for factor_idx, factor_path in enumerate(factor_files, start=1):
         started_at = perf_counter()
@@ -88,6 +89,7 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
             factor_name=factor_name,
             factor=factor,
             universe=universe,
+            period_masks=period_masks,
             trade_status=trade_status,
             trade_prices=trade_prices,
             close_prices=close_prices,
@@ -119,6 +121,7 @@ def simulate_one_factor(
     factor_name: str,
     factor: np.ndarray,
     universe: np.ndarray,
+    period_masks: dict[str, np.ndarray],
     trade_status: np.ndarray,
     trade_prices: np.ndarray,
     close_prices: np.ndarray,
@@ -133,19 +136,132 @@ def simulate_one_factor(
 ) -> SimulationResult:
     """模拟单个因子的真实账户回测：上一日因子选股，下一交易日成交并收盘估值。"""
     sim_cfg = config.simulation
+    date_index = window.pandas_index
+    if not period_masks:
+        raise ValueError("period_masks is empty")
+    sleeve_initial = sim_cfg.initial_capital / len(period_masks)
+
+    daily_frames: list[pd.DataFrame] = []
+    trade_frames: list[pd.DataFrame] = []
+    selection_frames: list[pd.DataFrame] = []
+    simulators: list[Simulator] = []
+
+    for period_key, rebalance_mask in period_masks.items():
+        simulator, daily, trades, selections = simulate_one_offset(
+            config=config,
+            data=data,
+            window=window,
+            factor=factor,
+            universe=universe,
+            trade_status=trade_status,
+            trade_prices=trade_prices,
+            close_prices=close_prices,
+            limit_status=limit_status,
+            market_cap=market_cap,
+            factor_direction=factor_direction,
+            period_key=period_key,
+            rebalance_mask=rebalance_mask,
+            initial_capital=sleeve_initial,
+        )
+        simulators.append(simulator)
+        daily_frames.append(daily)
+        if not trades.empty:
+            trade_frames.append(trades)
+        if not selections.empty:
+            selection_frames.append(selections)
+
+    # 将多 offset sleeve 记录整理为合成净值、交易流水、选股结果和指标表，分别落盘并写入 HTML。
+    nav_df, offset_nav_df = build_ensemble_nav(
+        date_index=date_index,
+        daily_frames=daily_frames,
+        benchmark_nav=benchmark_nav,
+        initial_capital=sim_cfg.initial_capital,
+    )
+    if benchmark_nav is not None and not benchmark_nav.empty:
+        nav_df["benchmark_nav"] = benchmark_nav.reindex(nav_df.index).ffill()
+        nav_df["excess_nav"] = nav_df["strategy_nav"] / nav_df["benchmark_nav"]
+
+    trades_df = pd.concat(trade_frames, ignore_index=True) if trade_frames else pd.DataFrame()
+    selections_df = pd.concat(selection_frames, ignore_index=True) if selection_frames else pd.DataFrame()
+    selection_profile_df = build_selection_profile(
+        selections_df=selections_df,
+        tickers=data.tickers,
+        dates=window.dates,
+        industry=industry,
+        industry_names=industry_names,
+        market_cap=market_cap,
+    )
+    metrics = nav_metrics(nav_df["strategy_nav"], nav_df.get("benchmark_nav"))
+    metrics.update(
+        {
+            "total_commission": sum(simulator.total_commission for simulator in simulators),
+            "total_stamp_tax": sum(simulator.total_stamp_tax for simulator in simulators),
+            "avg_turnover": float(nav_df["turnover"].mean()) if "turnover" in nav_df else np.nan,
+            "trade_count": int(len(trades_df[trades_df["shares"] > 0])) if not trades_df.empty else 0,
+            "rankic_mean_from_step1": rankic_mean,
+            "auto_factor_direction": "small_is_better" if factor_direction else "large_is_better",
+            "benchmark_status": "found" if benchmark_nav is not None and not benchmark_nav.empty else f"missing:{sim_cfg.benchmark}",
+            "simulation_universe": sim_cfg.universe,
+            "weight_method": sim_cfg.weight_method,
+            "period": sim_cfg.period,
+            "offset_count": len(period_masks),
+        }
+    )
+    metrics_df = metrics_to_frame(metrics)
+
+    factor_out = Path(get_folder_by_root(out_root, factor_name))
+    _write_csv_safely(nav_df, factor_out / "nav.csv")
+    _write_csv_safely(offset_nav_df, factor_out / "offset_nav.csv")
+    _write_csv_safely(trades_df, factor_out / "trades.csv", index=False)
+    _write_csv_safely(selections_df, factor_out / "selections.csv", index=False)
+    _write_csv_safely(selection_profile_df, factor_out / "selection_profile.csv", index=False)
+    _write_csv_safely(metrics_df, factor_out / "metrics.csv", index=False)
+    html_path = factor_out / f"{factor_name}_simulation.html"
+    write_simulation_html(
+        html_path,
+        factor_name,
+        nav_df,
+        metrics_df,
+        trades_df,
+        selections_df,
+        selection_profile_df,
+        offset_nav_df=offset_nav_df,
+    )
+    maybe_write_quantstats(config, factor_name, nav_df, factor_out)
+
+    return SimulationResult(factor_name, nav_df, trades_df, selections_df, metrics_df, html_path)
+
+
+def simulate_one_offset(
+    config: BacktestConfig,
+    data: BacktestData,
+    window: DateWindow,
+    factor: np.ndarray,
+    universe: np.ndarray,
+    trade_status: np.ndarray,
+    trade_prices: np.ndarray,
+    close_prices: np.ndarray,
+    limit_status: np.ndarray,
+    market_cap: np.ndarray | None,
+    factor_direction: bool,
+    period_key: str,
+    rebalance_mask: np.ndarray,
+    initial_capital: float,
+) -> tuple[Simulator, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Run one offset sleeve as an independent trading account."""
+    sim_cfg = config.simulation
     simulator = Simulator(
-        initial_cash=sim_cfg.initial_capital,
+        initial_cash=initial_capital,
         commission_rate=sim_cfg.fee,
         stamp_tax_rate=sim_cfg.stamp_duty,
     )
     selections: list[dict] = []
-    date_index = window.pandas_index
+    rebalance_mask = np.asarray(rebalance_mask, dtype=bool)
 
     for date_idx, date in enumerate(window.dates):
-        # 每天先按收盘价估值；若当天是换仓日，再用上一交易日因子生成目标组合。
         turnover = 0.0
         close_dict = vector_to_price_dict(data.tickers, close_prices[:, date_idx])
-        if should_rebalance(date_idx, sim_cfg.rebalance_freq_days):
+        if date_idx > 0 and date_idx < len(rebalance_mask) and rebalance_mask[date_idx]:
             factor_idx = date_idx - 1
             selected, scores = select_stocks(
                 factor=factor[:, factor_idx],
@@ -168,6 +284,7 @@ def simulate_one_factor(
             for rank, stock in enumerate(selected, start=1):
                 selections.append(
                     {
+                        "period_key": period_key,
                         "date": date,
                         "factor_date": window.dates[factor_idx],
                         "rank": rank,
@@ -178,7 +295,6 @@ def simulate_one_factor(
                 )
             trade_dict = vector_to_price_dict(data.tickers, trade_prices[:, date_idx])
             limit_dict = vector_to_limit_dict(data.tickers, limit_status[:, date_idx])
-            # 模拟器内部按“先卖后买”执行，并处理滑点、佣金、印花税和涨跌停限制。
             turnover = simulator.adjust_to_target_weights(
                 target_weights=weights,
                 trade_prices=trade_dict,
@@ -191,57 +307,54 @@ def simulate_one_factor(
             )
         simulator.mark_to_market(date, close_dict, turnover=turnover)
 
-    # 将模拟器记录整理为净值、交易流水、选股结果和指标表，分别落盘并写入 HTML。
     daily = pd.DataFrame(simulator.daily_records)
     if not daily.empty:
+        daily.insert(0, "period_key", period_key)
         daily.index = pd.to_datetime(daily["date"], format="%Y%m%d")
-    nav_df = pd.DataFrame(index=date_index)
-    if not daily.empty:
-        nav_df["strategy_nav"] = daily.reindex(date_index)["nav"].astype(float)
-        nav_df["cash"] = daily.reindex(date_index)["cash"].astype(float)
-        nav_df["position_value"] = daily.reindex(date_index)["position_value"].astype(float)
-        nav_df["turnover"] = daily.reindex(date_index)["turnover"].astype(float)
-    if benchmark_nav is not None and not benchmark_nav.empty:
-        nav_df["benchmark_nav"] = benchmark_nav.reindex(nav_df.index).ffill()
-        nav_df["excess_nav"] = nav_df["strategy_nav"] / nav_df["benchmark_nav"]
-
-    trades_df = pd.DataFrame(simulator.trade_records)
+    trades = pd.DataFrame(simulator.trade_records)
+    if not trades.empty:
+        trades.insert(0, "period_key", period_key)
     selections_df = pd.DataFrame(selections)
-    selection_profile_df = build_selection_profile(
-        selections_df=selections_df,
-        tickers=data.tickers,
-        dates=window.dates,
-        industry=industry,
-        industry_names=industry_names,
-        market_cap=market_cap,
-    )
-    metrics = nav_metrics(nav_df["strategy_nav"], nav_df.get("benchmark_nav"))
-    metrics.update(
-        {
-            "total_commission": simulator.total_commission,
-            "total_stamp_tax": simulator.total_stamp_tax,
-            "avg_turnover": float(nav_df["turnover"].mean()) if "turnover" in nav_df else np.nan,
-            "trade_count": int(len(trades_df[trades_df["shares"] > 0])) if not trades_df.empty else 0,
-            "rankic_mean_from_step1": rankic_mean,
-            "auto_factor_direction": "small_is_better" if factor_direction else "large_is_better",
-            "benchmark_status": "found" if benchmark_nav is not None and not benchmark_nav.empty else f"missing:{sim_cfg.benchmark}",
-            "simulation_universe": sim_cfg.universe,
-            "weight_method": sim_cfg.weight_method,
-        }
-    )
-    metrics_df = metrics_to_frame(metrics)
+    return simulator, daily, trades, selections_df
 
-    factor_out = Path(get_folder_by_root(out_root, factor_name))
-    _write_csv_safely(nav_df, factor_out / "nav.csv")
-    _write_csv_safely(trades_df, factor_out / "trades.csv", index=False)
-    _write_csv_safely(selections_df, factor_out / "selections.csv", index=False)
-    _write_csv_safely(selection_profile_df, factor_out / "selection_profile.csv", index=False)
-    _write_csv_safely(metrics_df, factor_out / "metrics.csv", index=False)
-    html_path = factor_out / f"{factor_name}_simulation.html"
-    write_simulation_html(html_path, factor_name, nav_df, metrics_df, trades_df, selections_df, selection_profile_df)
-    maybe_write_quantstats(config, factor_name, nav_df, factor_out)
 
-    return SimulationResult(factor_name, nav_df, trades_df, selections_df, metrics_df, html_path)
+def build_ensemble_nav(
+    date_index: pd.DatetimeIndex,
+    daily_frames: list[pd.DataFrame],
+    benchmark_nav: pd.Series,
+    initial_capital: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Combine offset sleeves into one account-level NAV and a per-offset NAV table."""
+    nav_df = pd.DataFrame(index=date_index)
+    offset_nav_df = pd.DataFrame(index=date_index)
+    total_equity = pd.Series(0.0, index=date_index)
+    cash = pd.Series(0.0, index=date_index)
+    position_value = pd.Series(0.0, index=date_index)
+    turnover_value = pd.Series(0.0, index=date_index)
+
+    for daily in daily_frames:
+        if daily.empty:
+            continue
+        period_key = str(daily["period_key"].iloc[0])
+        aligned = daily.reindex(date_index)
+        equity = pd.to_numeric(aligned["total_equity"], errors="coerce").ffill().fillna(0.0)
+        total_equity += equity
+        cash += pd.to_numeric(aligned["cash"], errors="coerce").ffill().fillna(0.0)
+        position_value += pd.to_numeric(aligned["position_value"], errors="coerce").ffill().fillna(0.0)
+        turnover = pd.to_numeric(aligned["turnover"], errors="coerce").fillna(0.0)
+        turnover_value += turnover * equity
+        offset_nav_df[period_key] = pd.to_numeric(aligned["nav"], errors="coerce").ffill()
+
+    nav_df["strategy_nav"] = total_equity / max(initial_capital, 1.0)
+    nav_df["cash"] = cash
+    nav_df["position_value"] = position_value
+    nav_df["turnover"] = np.divide(
+        turnover_value.to_numpy(dtype=float),
+        np.maximum(total_equity.to_numpy(dtype=float), 1.0),
+    )
+    if benchmark_nav is not None and not benchmark_nav.empty:
+        offset_nav_df["benchmark_nav"] = benchmark_nav.reindex(offset_nav_df.index).ffill()
+    return nav_df, offset_nav_df
 
 
 def _write_csv_safely(df: pd.DataFrame, path: Path, index: bool = True) -> bool:
