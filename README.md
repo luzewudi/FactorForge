@@ -39,6 +39,8 @@ python step2_模拟回测.py --config config/kaiyuan.yaml
 
 `config/config.yaml` 和 `config/kaiyuan.yaml` 是保留的示例配置。其他临时或批量运行配置默认被 `.gitignore` 忽略，避免把本地实验参数误提交。
 
+Linux 服务器可从 `config/config_linux.yaml` 起步。该示例把基础数据路径配置为 `/mnt/ssd/eod`、`/mnt/ssd/fundmental`、`/shared/FactorBank/data_fund`，label 路径配置为 `/home/luze/label`。因子目录和输出目录按服务器实际位置调整即可，代码中不内置任何 Linux 默认路径。
+
 ## 报告说明
 
 HTML 报告默认使用中文标题和中文指标表。Step2 中 benchmark 使用黑色实线，策略、基准、超额净值和回撤在同一张图里展示；日收益率、日换手率和选股画像会作为独立子图输出。
