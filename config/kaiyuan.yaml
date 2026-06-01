@@ -16,7 +16,7 @@ analysis:
   turnover: 1
   per_divide_num: 10
   universe: "0"
-  benchmark: "881001"
+  benchmark: "000985"
   trade_price: vwap
   # 分层组合组内加权方法：equal 等权，market 市值加权，factor_softmax 因子值 softmax 加权。
   weight_method: equal
@@ -40,6 +40,6 @@ simulation:
   initial_capital: 10000000
   rebalance_freq_days: 1
   trade_price: vwap
-  benchmark: "881001"
+  benchmark: "000985"
   slippage: 0.0
   enable_quantstats: true

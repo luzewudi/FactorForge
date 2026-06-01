@@ -75,6 +75,15 @@ except ImportError:
     pass
 
 
+def _benchmark_label(benchmark) -> str:
+    """Return the display label attached to a benchmark Series/DataFrame."""
+    if isinstance(benchmark, _pd.Series):
+        return str(benchmark.name) if benchmark.name else "Benchmark"
+    if isinstance(benchmark, _pd.DataFrame) and len(benchmark.columns):
+        return str(benchmark.columns[0])
+    return "Benchmark"
+
+
 def to_plotly(fig: _Figure) -> _Figure:
     """
     Convert a matplotlib figure to a Plotly interactive plot.
@@ -638,7 +647,7 @@ def returns(
         if isinstance(benchmark, str):
             title += " vs %s" % benchmark.upper()
         else:
-            title += " vs Benchmark"
+            title += " vs %s" % _benchmark_label(benchmark)
         if match_volatility:
             title += " (Volatility Matched)"
 
@@ -737,7 +746,7 @@ def log_returns(
         if isinstance(benchmark, str):
             title += " vs %s (Log Scaled" % benchmark.upper()
         else:
-            title += " vs Benchmark (Log Scaled"
+            title += " vs %s (Log Scaled" % _benchmark_label(benchmark)
         if match_volatility:
             title += ", Volatility Matched"
     else:
@@ -932,7 +941,7 @@ def yearly_returns(
     # Set plot title
     title = "EOY Returns"
     if benchmark is not None:
-        title += "  vs Benchmark"
+        title += "  vs %s" % _benchmark_label(benchmark)
         # Prepare and resample benchmark data
         benchmark = _get_utils()._prepare_benchmark(benchmark, returns.index)
         benchmark = safe_resample(benchmark, "YE", _get_stats().comp)

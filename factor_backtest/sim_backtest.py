@@ -568,6 +568,8 @@ def maybe_write_quantstats(config: BacktestConfig, factor_name: str, nav_df: pd.
         return
     returns = nav_df["strategy_nav"].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
     benchmark = nav_df["benchmark_nav"].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    benchmark_title = benchmark_display_name(config.simulation.benchmark)
+    benchmark.name = benchmark_title
     aligned = pd.concat([returns, benchmark], axis=1, join="inner").dropna()
     if aligned.empty:
         return
@@ -577,9 +579,35 @@ def maybe_write_quantstats(config: BacktestConfig, factor_name: str, nav_df: pd.
             benchmark=aligned.iloc[:, 1],
             output=str(factor_out / "quantstats_report.html"),
             title=f"{factor_name} QuantStats Report",
+            benchmark_title=benchmark_title,
         )
     except Exception as exc:
         logger.warning(f"[step2] 本地 quantstats 增强报告生成失败，因子 {factor_name}：{exc}")
+
+
+def benchmark_display_name(code: str | int | float | None) -> str:
+    """把配置中的指数代码显示成更可读的 benchmark 名称；未知代码保留原代码。"""
+    text = "" if code is None else str(code).strip()
+    normalized = text.split(".")[0].upper()
+    names = {
+        "000001": "000001 上证指数",
+        "000016": "000016 上证50",
+        "000300": "000300 沪深300",
+        "000905": "000905 中证500",
+        "000906": "000906 中证800",
+        "000852": "000852 中证1000",
+        "000985": "000985 中证全指",
+        "000986": "000986 中证全指证券公司",
+        "000987": "000987 中证全指能源",
+        "399001": "399001 深证成指",
+        "399006": "399006 创业板指",
+        "399300": "399300 沪深300",
+        "399905": "399905 中证500",
+        "399906": "399906 中证800",
+        "399852": "399852 中证1000",
+        "881001": "881001 万得全A",
+    }
+    return names.get(normalized, text or "基准")
 
 
 def import_local_quantstats():
