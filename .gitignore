@@ -18,6 +18,7 @@ env/
 
 config/*.yaml
 !config/config.yaml
+!config/config_linux.yaml
 !config/kaiyuan.yaml
 
 logs/

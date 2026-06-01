@@ -1,0 +1,44 @@
+paths:
+  # Linux 服务器路径。这里按当前机器挂载约定配置，代码中不内置任何默认数据路径。
+  eod_path: "/mnt/ssd/eod"
+  fund_path: "/mnt/ssd/fundmental"
+  data_fund_path: "/shared/FactorBank/data_fund"
+  label_path: "/home/luze/label"
+  period_path: "/home/luze/period"
+  # 按实际 Linux 服务器上的因子和输出目录修改。
+  factor_folder: "/home/luze/factors"
+  output_folder: "/home/luze/output"
+
+analysis:
+  factors: all
+  start_date: "20200102"
+  end_date: "20241231"
+  period: 1
+  offsets: all
+  offset_mode: ensemble
+  label_days: 1
+  per_divide_num: 5
+  universe: "0"
+  benchmark: "000852"
+  trade_price: vwap
+  weight_method: equal
+  neutralization: none
+  ic_tstat:
+    window: 252
+    min_periods: 21
+
+simulation:
+  factors: all
+  universe: "0"
+  weight_method: equal
+  select_n: 100
+  fee: 0.0003
+  stamp_duty: 0.001
+  initial_capital: 10000000
+  period: 1
+  offsets: all
+  offset_mode: ensemble
+  trade_price: vwap
+  benchmark: "000852"
+  slippage: 0.0
+  enable_quantstats: true

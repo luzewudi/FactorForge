@@ -70,6 +70,7 @@ class PathConfig:
         """读取 paths 模块，并把所有路径转换为 Path 对象，便于后续统一拼接。"""
         required = [
             "eod_path",
+            "period_path",
             "fund_path",
             "data_fund_path",
             "label_path",
@@ -79,9 +80,7 @@ class PathConfig:
         missing = [key for key in required if not raw.get(key)]
         if missing:
             raise ValueError(f"paths missing required keys: {', '.join(missing)}")
-        values = {key: Path(raw[key]) for key in required}
-        values["period_path"] = Path(raw.get("period_path") or (values["eod_path"].parent / "period"))
-        return cls(**values)
+        return cls(**{key: Path(raw[key]) for key in required})
 
 
 @dataclass
@@ -330,6 +329,7 @@ def validate_config(paths: PathConfig, analysis: AnalysisConfig, simulation: Sim
     """在正式运行前检查路径、日期、交易价格和核心参数，尽早暴露配置错误。"""
     for label, path in [
         ("eod_path", paths.eod_path),
+        ("period_path", paths.period_path),
         ("fund_path", paths.fund_path),
         ("data_fund_path", paths.data_fund_path),
         ("label_path", paths.label_path),
