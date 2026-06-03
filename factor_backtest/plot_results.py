@@ -218,12 +218,12 @@ def _rolling_t_figure(rolling_t: pd.Series) -> go.Figure | None:
         go.Scatter(
             x=s.index,
             y=s.values,
-            name="滚动 IC t 值",
+            name="滚动 RankIC t 值",
             line=dict(color="#B07AA1", width=2),
         )
     )
     fig.add_hline(y=0.0, line_dash="dash", line_color="#8A94A6")
-    _style_time_series_figure(fig, title="滚动 IC t 值", height=430, legend_x=0.84, x_domain=(0.0, 0.82))
+    _style_time_series_figure(fig, title="滚动 RankIC t 值", height=430, legend_x=0.84, x_domain=(0.0, 0.82))
     fig.update_yaxes(title_text="t 值", tickformat=".2f")
     return fig
 

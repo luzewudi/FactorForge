@@ -72,12 +72,12 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
         factor = np.where(universe, factor, np.nan)
         factor = apply_neutralization(config, data, window, factor_name, factor)
 
-        # Step4：横截面逐日计算 IC/RankIC，并补充年度、TOTAL 和滚动 t 值统计。
+        # Step4：横截面逐日计算 IC/RankIC，并补充年度、TOTAL 和 RankIC 滚动 t 值统计。
         logger.debug(f"[step1][{factor_idx}/{total_factors}] {factor_name} - Step4：计算 IC、RankIC 和滚动 t 值。")
         ic_series, rankic_series = compute_ic_rankic(factor, label, universe, trade_status, window)
         stats_df = annual_ic_stats(ic_series, rankic_series, annualization_factor=annualization_factor)
         rolling_t = rolling_t_value(
-            ic_series,
+            rankic_series,
             window=analysis.ic_tstat.window,
             min_periods=analysis.ic_tstat.min_periods,
         )

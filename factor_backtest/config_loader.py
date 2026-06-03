@@ -90,7 +90,7 @@ class TStatConfig:
 
     @classmethod
     def from_value(cls, raw: Any) -> "TStatConfig":
-        """读取 IC 滚动 t 值配置；允许直接写窗口数字，也允许写 window/min_periods 字典。"""
+        """读取 RankIC 滚动 t 值配置；允许直接写窗口数字，也允许写 window/min_periods 字典。"""
         if raw is None:
             return cls()
         if isinstance(raw, dict):
