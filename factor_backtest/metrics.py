@@ -101,7 +101,7 @@ def annual_ic_stats(ic: pd.Series, rankic: pd.Series, annualization_factor: floa
 
 
 def rolling_t_value(series: pd.Series, window: int = 252, min_periods: int = 21) -> pd.Series:
-    """计算滚动 t 值曲线，用于观察 IC 均值显著性的时间变化。"""
+    """计算滚动 t 值曲线，用于观察输入序列均值显著性的时间变化。"""
     s = pd.Series(series, dtype=float)
 
     def calc(values: np.ndarray) -> float:
