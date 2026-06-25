@@ -37,7 +37,7 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
 
     # Step2：读取成交价、估值价、交易状态、涨跌停和复利基准净值。
     # simulation.universe 是真实账户模拟的独立股票池，允许和 Step1 因子分析股票池不同。
-    universe = data.load_universe(config.simulation.universe, window)
+    universe = data.apply_candidate_filters(data.load_universe(config.simulation.universe, window), config.simulation.filters, window)
     period_masks = data.load_period_masks(config.simulation.period, config.simulation.offsets, window)
     trade_status = data.load_eod_panel("TradeStatus.npy", window)
     trade_prices, close_prices, limit_status = data.load_simulation_price_panels(config.simulation.trade_price, window)
@@ -248,12 +248,13 @@ def simulate_one_offset(
     rebalance_mask: np.ndarray,
     initial_capital: float,
 ) -> tuple[Simulator, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Run one offset sleeve as an independent trading account."""
+    """把单个 offset 当成独立袖套账户进行真实账户模拟。"""
     sim_cfg = config.simulation
     simulator = Simulator(
         initial_cash=initial_capital,
         commission_rate=sim_cfg.fee,
         stamp_tax_rate=sim_cfg.stamp_duty,
+        cash_buffer_ratio=sim_cfg.cash_buffer_ratio,
     )
     selections: list[dict] = []
     rebalance_mask = np.asarray(rebalance_mask, dtype=bool)
@@ -331,6 +332,10 @@ def build_ensemble_nav(
     cash = pd.Series(0.0, index=date_index)
     position_value = pd.Series(0.0, index=date_index)
     turnover_value = pd.Series(0.0, index=date_index)
+    daily_buy_value = pd.Series(0.0, index=date_index)
+    daily_sell_value = pd.Series(0.0, index=date_index)
+    daily_commission = pd.Series(0.0, index=date_index)
+    daily_stamp_tax = pd.Series(0.0, index=date_index)
 
     for daily in daily_frames:
         if daily.empty:
@@ -343,11 +348,23 @@ def build_ensemble_nav(
         position_value += pd.to_numeric(aligned["position_value"], errors="coerce").ffill().fillna(0.0)
         turnover = pd.to_numeric(aligned["turnover"], errors="coerce").fillna(0.0)
         turnover_value += turnover * equity
+        daily_buy_value += _numeric_daily_column(aligned, "daily_buy_value")
+        daily_sell_value += _numeric_daily_column(aligned, "daily_sell_value")
+        daily_commission += _numeric_daily_column(aligned, "daily_commission")
+        daily_stamp_tax += _numeric_daily_column(aligned, "daily_stamp_tax")
         offset_nav_df[period_key] = pd.to_numeric(aligned["nav"], errors="coerce").ffill()
 
     nav_df["strategy_nav"] = total_equity / max(initial_capital, 1.0)
     nav_df["cash"] = cash
     nav_df["position_value"] = position_value
+    nav_df["daily_buy_value"] = daily_buy_value
+    nav_df["daily_sell_value"] = daily_sell_value
+    nav_df["daily_commission"] = daily_commission
+    nav_df["daily_stamp_tax"] = daily_stamp_tax
+    nav_df["actual_position_ratio"] = np.divide(
+        position_value.to_numpy(dtype=float),
+        np.maximum(total_equity.to_numpy(dtype=float), 1.0),
+    )
     nav_df["turnover"] = np.divide(
         turnover_value.to_numpy(dtype=float),
         np.maximum(total_equity.to_numpy(dtype=float), 1.0),
@@ -355,6 +372,13 @@ def build_ensemble_nav(
     if benchmark_nav is not None and not benchmark_nav.empty:
         offset_nav_df["benchmark_nav"] = benchmark_nav.reindex(offset_nav_df.index).ffill()
     return nav_df, offset_nav_df
+
+
+def _numeric_daily_column(frame: pd.DataFrame, column: str) -> pd.Series:
+    """读取单个袖套日度数值列；旧记录缺列时按 0 处理以兼容历史输出。"""
+    if column not in frame:
+        return pd.Series(0.0, index=frame.index)
+    return pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
 
 
 def _write_csv_safely(df: pd.DataFrame, path: Path, index: bool = True) -> bool:

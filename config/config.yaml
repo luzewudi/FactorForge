@@ -34,6 +34,10 @@ analysis:
   weight_method: equal
   # neutralization 控制因子中性化：none 不处理，market 做市值中性，industry_market 做行业+市值中性。
   neutralization: none
+  # 候选池过滤：默认过滤 ST、过滤涨跌停，并保留上市满 21 个可交易日的股票。
+  filter_st: true
+  filter_limit: true
+  min_listing_days: 21
   ic_tstat:
     window: 252
     min_periods: 21
@@ -50,6 +54,7 @@ simulation:
   fee: 0.0003
   stamp_duty: 0.001
   initial_capital: 10000000
+  cash_buffer_ratio: 0.0  # 可选：0.0~0.1；目标建仓权益缓冲，0.03 表示留 3% 现金，默认 0.0 不改变历史口径
   # period/offsets 读取 period_path 下的预计算换仓日；offsets=all 会多 offset 分资金袖套合成。
   period: 1
   offsets: all
@@ -58,3 +63,6 @@ simulation:
   benchmark: "000852"
   slippage: 0.0
   enable_quantstats: true
+  filter_st: true
+  filter_limit: true
+  min_listing_days: 21

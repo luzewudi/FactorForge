@@ -40,7 +40,7 @@ def run_factor_analysis(config: BacktestConfig) -> list[FactorAnalysisResult]:
     # Step2：读取 label、股票池、交易状态、周期掩码和 PnL 所需行情；IC 与分层净值分别使用不同数据口径。
     label = data.load_label(analysis.trade_price, analysis.label_days, window)
     period_masks = data.load_period_masks(analysis.period, analysis.offsets, window)
-    universe = data.load_universe(analysis.universe, window)
+    universe = data.apply_candidate_filters(data.load_universe(analysis.universe, window), analysis.filters, window)
     trade_status = data.load_eod_panel("TradeStatus.npy", window)
     limit_status = np.nan_to_num(data.load_eod_panel("UpDownLimitStatus.npy", window), nan=0.0)
     benchmark = data.load_benchmark_nav(analysis.benchmark, window, compound=False)
