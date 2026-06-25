@@ -56,6 +56,24 @@ def normalize_weight_method(raw: Any, default: str = "equal") -> str:
 
 
 @dataclass
+class FilterConfig:
+    """候选股票过滤配置：默认过滤 ST、涨跌停，并保留上市满 21 个可交易日的股票。"""
+
+    filter_st: bool = True
+    filter_limit: bool = True
+    min_listing_days: int = 21
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "FilterConfig":
+        """从 analysis/simulation 配置段读取候选池过滤参数。"""
+        return cls(
+            filter_st=_as_bool(raw.get("filter_st"), True),
+            filter_limit=_as_bool(raw.get("filter_limit"), True),
+            min_listing_days=max(0, int(raw.get("min_listing_days", 21))),
+        )
+
+
+@dataclass
 class PathConfig:
     eod_path: Path
     fund_path: Path
@@ -113,6 +131,7 @@ class AnalysisConfig:
     trade_price: str = "vwap"
     weight_method: str = "equal"
     neutralization: str = "none"
+    filters: FilterConfig = field(default_factory=FilterConfig)
     ic_tstat: TStatConfig = field(default_factory=TStatConfig)
 
     @classmethod
@@ -129,6 +148,7 @@ class AnalysisConfig:
             trade_price=str(raw.get("trade_price", "vwap")).lower(),
             weight_method=read_weight_method(raw, "analysis"),
             neutralization=str(raw.get("neutralization", "none")).lower(),
+            filters=FilterConfig.from_dict(raw),
             ic_tstat=TStatConfig.from_value(raw.get("ic_tstat")),
         )
 
@@ -142,11 +162,13 @@ class SimulationConfig:
     fee: float = 0.0003
     stamp_duty: float = 0.001
     initial_capital: float = 10_000_000.0
+    cash_buffer_ratio: float = 0.0
     rebalance_freq_days: int = 1
     trade_price: str = "vwap"
     benchmark: str = "000852"
     slippage: float = 0.0
     enable_quantstats: bool = True
+    filters: FilterConfig = field(default_factory=FilterConfig)
 
     @classmethod
     def from_dict(
@@ -164,11 +186,13 @@ class SimulationConfig:
             fee=float(raw.get("fee", 0.0003)),
             stamp_duty=float(raw.get("stamp_duty", 0.001)),
             initial_capital=float(raw.get("initial_capital", 10_000_000.0)),
+            cash_buffer_ratio=float(raw.get("cash_buffer_ratio", 0.0)),
             rebalance_freq_days=int(raw.get("rebalance_freq_days", 1)),
             trade_price=str(raw.get("trade_price", analysis.trade_price)).lower(),
             benchmark=str(raw.get("benchmark", analysis.benchmark)),
             slippage=float(raw.get("slippage", 0.0)),
             enable_quantstats=_as_bool(raw.get("enable_quantstats"), True),
+            filters=FilterConfig.from_dict(raw),
         )
 
 
@@ -252,6 +276,8 @@ def validate_config(paths: PathConfig, analysis: AnalysisConfig, simulation: Sim
         raise ValueError("analysis.neutralization must be none, market, or industry_market")
     if simulation.rebalance_freq_days <= 0:
         raise ValueError("simulation.rebalance_freq_days must be positive")
+    if not 0.0 <= simulation.cash_buffer_ratio < 1.0:
+        raise ValueError("simulation.cash_buffer_ratio must be in [0, 1)")
     if simulation.trade_price not in {"open", "close", "vwap", "periodvwap", "period_vwap"}:
         raise ValueError("simulation.trade_price must be open, close, vwap, or periodvwap")
     if simulation.weight_method not in {"equal", "market", "factor_softmax"}:

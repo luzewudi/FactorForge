@@ -6,6 +6,9 @@ from typing import Dict, Iterable
 
 import numpy as np
 
+from .lot_rules import LotRuleResult, identify_stock_board, round_buy_shares_by_board
+from utils.log_kit import logger
+
 
 @dataclass
 class Simulator:
@@ -13,6 +16,7 @@ class Simulator:
     commission_rate: float
     stamp_tax_rate: float
     lot_size: int = 100
+    cash_buffer_ratio: float = 0.0
     cash: float = field(init=False)
     positions: dict[str, int] = field(default_factory=dict)
     trade_records: list[dict] = field(default_factory=list)
@@ -20,10 +24,17 @@ class Simulator:
     total_commission: float = 0.0
     total_stamp_tax: float = 0.0
     last_prices: dict[str, float] = field(default_factory=dict)
+    _target_rejections: dict[str, tuple[int, LotRuleResult]] = field(default_factory=dict, init=False)
+    _pending_buy_value: float = field(default=0.0, init=False)
+    _pending_sell_value: float = field(default=0.0, init=False)
+    _pending_commission: float = field(default=0.0, init=False)
+    _pending_stamp_tax: float = field(default=0.0, init=False)
+    _insufficient_cash_warned: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         """初始化账户现金；持仓、流水和估值记录由 dataclass 默认工厂创建。"""
         self.cash = float(self.initial_cash)
+        self.cash_buffer_ratio = min(max(float(self.cash_buffer_ratio), 0.0), 0.99)
 
     def total_equity(self, close_prices: dict[str, float]) -> float:
         """按最新收盘价计算账户总权益：现金 + 当前持仓市值。"""
@@ -86,8 +97,14 @@ class Simulator:
             "turnover": float(turnover),
             "commission": float(self.total_commission),
             "stamp_tax": float(self.total_stamp_tax),
+            "daily_buy_value": float(self._pending_buy_value),
+            "daily_sell_value": float(self._pending_sell_value),
+            "daily_commission": float(self._pending_commission),
+            "daily_stamp_tax": float(self._pending_stamp_tax),
+            "actual_position_ratio": float(pos_value / equity) if equity > 0 else np.nan,
         }
         self.daily_records.append(record)
+        self._reset_pending_trade_totals()
         return record
 
     def _target_shares(
@@ -97,22 +114,26 @@ class Simulator:
         equity: float,
         slippage: float,
     ) -> dict[str, int]:
-        """把目标权重转换成目标股数，并按 A 股一手 100 股约束向下取整。"""
+        """把目标权重转换成目标股数，并按板块买入单位约束取整。"""
+        self._target_rejections.clear()
         total_weight = sum(max(0.0, float(w)) for w in target_weights.values())
         if total_weight <= 0:
             return {}
         out: dict[str, int] = {}
+        usable_equity = equity * (1.0 - self.cash_buffer_ratio)
         for stock, weight in target_weights.items():
             stock = normalize_stock(stock)
             price = trade_prices.get(stock, np.nan)
             if not np.isfinite(price) or price <= 0:
                 continue
             exec_price = price * (1.0 + slippage)
-            target_value = equity * max(0.0, float(weight)) / total_weight
+            target_value = usable_equity * max(0.0, float(weight)) / total_weight
             raw_shares = int(target_value / (exec_price * (1.0 + self.commission_rate)))
-            shares = round_lot(raw_shares, self.lot_size)
-            if shares > 0:
-                out[stock] = shares
+            result = round_buy_shares_by_board(stock, raw_shares, self.lot_size)
+            if result.shares > 0:
+                out[stock] = result.shares
+            elif raw_shares > 0:
+                self._target_rejections[stock] = (raw_shares, result)
         return out
 
     def _sell_to_target(
@@ -125,6 +146,7 @@ class Simulator:
     ) -> None:
         """执行卖出计划；跌停或价格无效时不成交，并写入交易流水。"""
         for stock in sorted(list(self.positions.keys())):
+            board = identify_stock_board(stock)
             current = self.positions.get(stock, 0)
             target = target_positions.get(stock, 0)
             shares = current - target
@@ -132,10 +154,10 @@ class Simulator:
                 continue
             raw_price = trade_prices.get(stock, np.nan)
             if not np.isfinite(raw_price) or raw_price <= 0:
-                self._record(trade_date, stock, "SELL", 0, raw_price, 0.0, 0.0, 0.0, "价格无效", "price is nan")
+                self._record(trade_date, stock, "SELL", 0, raw_price, 0.0, 0.0, 0.0, "价格无效", "price is nan", requested_shares=shares)
                 continue
             if int(limit_status.get(stock, 0)) == -1:
-                self._record(trade_date, stock, "SELL", 0, raw_price, 0.0, 0.0, 0.0, "跌停", "limit down")
+                self._record(trade_date, stock, "SELL", 0, raw_price, 0.0, 0.0, 0.0, "跌停", "limit down", requested_shares=shares)
                 continue
             exec_price = raw_price * (1.0 - slippage)
             value = shares * exec_price
@@ -147,7 +169,22 @@ class Simulator:
                 self.positions.pop(stock, None)
             self.total_commission += commission
             self.total_stamp_tax += stamp
-            self._record(trade_date, stock, "SELL", shares, exec_price, value, commission, stamp, "成交", "")
+            self._record(
+                trade_date,
+                stock,
+                "SELL",
+                shares,
+                exec_price,
+                value,
+                commission,
+                stamp,
+                "成交",
+                "",
+                requested_shares=shares,
+                executed_shares=shares,
+                board_type=board.board_type,
+                lot_rule=board.lot_rule,
+            )
 
     def _buy_to_target(
         self,
@@ -169,29 +206,101 @@ class Simulator:
         buy_plan.sort(key=lambda x: x[2], reverse=not factor_direction)
 
         for stock, shares, _score in buy_plan:
+            requested_shares = int(shares)
+            board = identify_stock_board(stock)
             raw_price = trade_prices.get(stock, np.nan)
             if not np.isfinite(raw_price) or raw_price <= 0:
-                self._record(trade_date, stock, "BUY", 0, raw_price, 0.0, 0.0, 0.0, "价格无效", "price is nan")
+                self._record(trade_date, stock, "BUY", 0, raw_price, 0.0, 0.0, 0.0, "价格无效", "price is nan", requested_shares=requested_shares)
                 continue
             if int(limit_status.get(stock, 0)) == 1:
-                self._record(trade_date, stock, "BUY", 0, raw_price, 0.0, 0.0, 0.0, "涨停", "limit up")
+                self._record(trade_date, stock, "BUY", 0, raw_price, 0.0, 0.0, 0.0, "涨停", "limit up", requested_shares=requested_shares)
                 continue
             exec_price = raw_price * (1.0 + slippage)
-            affordable = int(self.cash / (exec_price * (1.0 + self.commission_rate)))
-            shares = min(shares, round_lot(affordable, self.lot_size))
+            raw_affordable = int(self.cash / (exec_price * (1.0 + self.commission_rate)))
+            affordable = round_buy_shares_by_board(stock, raw_affordable, self.lot_size).shares
+            shares = min(shares, affordable)
+            if shares < requested_shares:
+                self._warn_insufficient_cash(trade_date, stock, requested_shares, shares)
             if shares <= 0:
-                self._record(trade_date, stock, "BUY", 0, exec_price, 0.0, 0.0, 0.0, "资金不足", "insufficient cash")
+                self._record(
+                    trade_date,
+                    stock,
+                    "BUY",
+                    0,
+                    exec_price,
+                    0.0,
+                    0.0,
+                    0.0,
+                    "资金不足",
+                    "insufficient cash",
+                    requested_shares=requested_shares,
+                    executed_shares=0,
+                    board_type=board.board_type,
+                    lot_rule=board.lot_rule,
+                )
                 continue
             value = shares * exec_price
             commission = value * self.commission_rate
             cost = value + commission
             if cost > self.cash + 1e-6:
-                self._record(trade_date, stock, "BUY", 0, exec_price, 0.0, 0.0, 0.0, "资金不足", "insufficient cash")
+                self._warn_insufficient_cash(trade_date, stock, requested_shares, 0)
+                self._record(
+                    trade_date,
+                    stock,
+                    "BUY",
+                    0,
+                    exec_price,
+                    0.0,
+                    0.0,
+                    0.0,
+                    "资金不足",
+                    "insufficient cash",
+                    requested_shares=requested_shares,
+                    executed_shares=0,
+                    board_type=board.board_type,
+                    lot_rule=board.lot_rule,
+                )
                 continue
             self.cash -= cost
             self.positions[stock] = self.positions.get(stock, 0) + shares
             self.total_commission += commission
-            self._record(trade_date, stock, "BUY", shares, exec_price, value, commission, 0.0, "成交", "")
+            reason = "资金不足导致部分成交" if shares < requested_shares else ""
+            self._record(
+                trade_date,
+                stock,
+                "BUY",
+                shares,
+                exec_price,
+                value,
+                commission,
+                0.0,
+                "成交",
+                reason,
+                requested_shares=requested_shares,
+                executed_shares=shares,
+                board_type=board.board_type,
+                lot_rule=board.lot_rule,
+            )
+
+        for stock, (raw_shares, result) in self._target_rejections.items():
+            if self.positions.get(stock, 0) <= 0:
+                raw_price = trade_prices.get(stock, np.nan)
+                self._record(
+                    trade_date,
+                    stock,
+                    "BUY",
+                    0,
+                    raw_price,
+                    0.0,
+                    0.0,
+                    0.0,
+                    "资金不足" if "低于" in result.reason else "不可买入",
+                    result.reason,
+                    requested_shares=raw_shares,
+                    executed_shares=0,
+                    board_type=result.board_type,
+                    lot_rule=result.lot_rule,
+                )
 
     def _record(
         self,
@@ -205,20 +314,38 @@ class Simulator:
         stamp_tax: float,
         status: str,
         reason: str,
+        requested_shares: int | None = None,
+        executed_shares: int | None = None,
+        board_type: str | None = None,
+        lot_rule: str | None = None,
     ) -> None:
         """记录单笔交易或失败委托，作为后续交易明细 CSV 的原始来源。"""
+        board = identify_stock_board(stock)
+        requested = int(shares if requested_shares is None else requested_shares)
+        executed = int(shares if executed_shares is None else executed_shares)
+        if status == "成交":
+            if action == "BUY":
+                self._pending_buy_value += float(value)
+            elif action == "SELL":
+                self._pending_sell_value += float(value)
+            self._pending_commission += float(commission)
+            self._pending_stamp_tax += float(stamp_tax)
         self.trade_records.append(
             {
                 "date": date,
                 "stock_code": stock,
                 "action": action,
-                "shares": int(shares),
+                "shares": executed,
+                "requested_shares": requested,
+                "executed_shares": executed,
                 "exec_price": float(exec_price) if np.isfinite(exec_price) else np.nan,
                 "value": float(value),
                 "commission": float(commission),
                 "stamp_tax": float(stamp_tax),
                 "status": status,
                 "reason": reason,
+                "board_type": board_type or board.board_type,
+                "lot_rule": lot_rule or board.lot_rule,
             }
         )
 
@@ -227,6 +354,23 @@ class Simulator:
         for stock, price in close_prices.items():
             if np.isfinite(price) and price > 0:
                 self.last_prices[stock] = float(price)
+
+    def _reset_pending_trade_totals(self) -> None:
+        """清空本次调仓累计的成交额和费用，供下一条净值记录重新累计。"""
+        self._pending_buy_value = 0.0
+        self._pending_sell_value = 0.0
+        self._pending_commission = 0.0
+        self._pending_stamp_tax = 0.0
+
+    def _warn_insufficient_cash(self, date: str, stock: str, requested: int, executed: int) -> None:
+        """资金不足导致买入少于目标时输出一次醒目的诊断提示。"""
+        if self._insufficient_cash_warned:
+            return
+        logger.warning(
+            "[sim-backtest] 出现可用资金不足，建议提高 cash_buffer_ratio；"
+            f"首个样本 date={date}, stock={stock}, 目标买入={requested}, 实际买入={executed}"
+        )
+        self._insufficient_cash_warned = True
 
 
 def normalize_stock(stock: str) -> str:

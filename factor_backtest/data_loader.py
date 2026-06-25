@@ -8,7 +8,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from .config_loader import BacktestConfig, strip_npy_suffix
+from .config_loader import BacktestConfig, FilterConfig, strip_npy_suffix
 
 
 def decode_array(values: Iterable) -> list[str]:
@@ -273,6 +273,29 @@ class BacktestData:
             sw = self.load_industry(window)
             return (sw // 10000).astype(float) == float(code)
         raise ValueError(f"unsupported universe: {universe}")
+
+    def apply_candidate_filters(self, universe: np.ndarray, filters: FilterConfig, window: DateWindow) -> np.ndarray:
+        """在基础股票池上叠加 TradeStatus、ST、涨跌停和上市天数过滤。"""
+        mask = np.asarray(universe, dtype=bool).copy()
+        trade_status = self.load_eod_panel("TradeStatus.npy", window)
+        mask &= trade_status == 1
+        if filters.filter_st:
+            st_status = self._load_optional_eod_panel("STStatus.npy", window, default=0.0)
+            mask &= st_status != 1
+        if filters.filter_limit:
+            limit_status = np.nan_to_num(self.load_eod_panel("UpDownLimitStatus.npy", window), nan=0.0)
+            mask &= (limit_status != 1) & (limit_status != -1)
+        if filters.min_listing_days > 0:
+            listing_days = np.cumsum(trade_status == 1, axis=1)
+            mask &= listing_days >= filters.min_listing_days
+        return mask
+
+    def _load_optional_eod_panel(self, file_name: str, window: DateWindow, default: float) -> np.ndarray:
+        """读取可选 EOD 面板，缺失时返回默认值矩阵。"""
+        path = self.eod_path / file_name
+        if not path.exists():
+            return np.full((len(self.tickers), len(window.dates)), default, dtype=float)
+        return self.load_eod_panel(file_name, window)
 
     def load_market_cap(self, window: DateWindow) -> np.ndarray:
         """读取总市值矩阵，主要用于市值加权和市值中性化。"""

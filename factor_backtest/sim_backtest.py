@@ -37,7 +37,7 @@ def run_simulation(config: BacktestConfig) -> list[SimulationResult]:
 
     # Step2：读取成交价、估值价、交易状态、涨跌停和复利基准净值。
     # simulation.universe 是真实账户模拟的独立股票池，允许和 Step1 因子分析股票池不同。
-    universe = data.load_universe(config.simulation.universe, window)
+    universe = data.apply_candidate_filters(data.load_universe(config.simulation.universe, window), config.simulation.filters, window)
     trade_status = data.load_eod_panel("TradeStatus.npy", window)
     trade_prices, close_prices, limit_status = data.load_simulation_price_panels(config.simulation.trade_price, window)
     benchmark_nav = data.load_benchmark_nav(config.simulation.benchmark, window, compound=True)
@@ -137,6 +137,7 @@ def simulate_one_factor(
         initial_cash=sim_cfg.initial_capital,
         commission_rate=sim_cfg.fee,
         stamp_tax_rate=sim_cfg.stamp_duty,
+        cash_buffer_ratio=sim_cfg.cash_buffer_ratio,
     )
     selections: list[dict] = []
     date_index = window.pandas_index
@@ -201,6 +202,9 @@ def simulate_one_factor(
         nav_df["cash"] = daily.reindex(date_index)["cash"].astype(float)
         nav_df["position_value"] = daily.reindex(date_index)["position_value"].astype(float)
         nav_df["turnover"] = daily.reindex(date_index)["turnover"].astype(float)
+        for column in ["daily_buy_value", "daily_sell_value", "daily_commission", "daily_stamp_tax", "actual_position_ratio"]:
+            if column in daily.columns:
+                nav_df[column] = pd.to_numeric(daily.reindex(date_index)[column], errors="coerce").astype(float)
     if benchmark_nav is not None and not benchmark_nav.empty:
         nav_df["benchmark_nav"] = benchmark_nav.reindex(nav_df.index).ffill()
         nav_df["excess_nav"] = nav_df["strategy_nav"] / nav_df["benchmark_nav"]
